@@ -1,26 +1,46 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Zap } from 'lucide-react';
+import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2 } from 'lucide-react';
 /* ============================================================
    Constants — your real week template
    ============================================================ */
 const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const DAY_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const WEEKDAY_DAYS = [1,2,3,4,5]; // Mon-Fri — days that check emails / evaluations recur on
-const LARGE_THRESHOLD = 30; // minutes — tasks at/above this count as "larger" for the reserved focus blocks
 const STORAGE_KEY = 'week-planner-state-v1';
+const SNAPSHOT_HISTORY_WEEKS = 52; // keep about a year of weekly workload snapshots, then drop the oldest
+const SCHEDULE_WEEKS = 3; // how far ahead the scheduler looks AND how far the board renders — one constant so the two can never drift apart
+const ARCHIVE_AFTER_DAYS = 60; // completed tasks older than this are compacted into the archive
+const UNDO_WINDOW_MS = 8000; // how long a deleted task can still be restored
+// A week running above this fraction of its remaining flex time has no slack left to
+// absorb a sick day, an unexpected meeting, or a task running long — so the traffic
+// light warns here rather than waiting for work to actually overflow the week.
+const HIGH_UTILISATION = 0.8;
+// How many completed-and-timed tasks before your personal estimate/actual ratio is
+// trustworthy enough to offer as a correction. Below this it's noise, not a pattern.
+const MIN_ACCURACY_SAMPLE = 5;
+// Quick-pick durations for the add-task form. Note 60min and "1 hour" are the same
+// value, so they're a single option here rather than two identical buttons.
+const DURATION_PRESETS = [
+  { minutes: 5,  label: '5m' },
+  { minutes: 10, label: '10m' },
+  { minutes: 15, label: '15m' },
+  { minutes: 30, label: '30m' },
+  { minutes: 60, label: '1h' },
+  { minutes: 90, label: '1.5h' },
+];
 const DEFAULT_SLOTS = [
-  { id: 'slot-mon-1', day: 1, start: '07:40', end: '08:00', restricted: false, energy: 'normal' },
-  { id: 'slot-mon-2', day: 1, start: '10:30', end: '10:45', restricted: false, energy: 'normal' },
-  { id: 'slot-mon-3', day: 1, start: '14:35', end: '15:00', restricted: false, energy: 'low' },
-  { id: 'slot-tue-1', day: 2, start: '10:30', end: '10:45', restricted: false, energy: 'normal' },
-  { id: 'slot-tue-2', day: 2, start: '14:35', end: '15:00', restricted: false, energy: 'low' },
-  { id: 'slot-tue-3', day: 2, start: '19:00', end: '20:00', restricted: true, energy: 'low' },
-  { id: 'slot-wed-1', day: 3, start: '07:40', end: '08:00', restricted: false, energy: 'normal' },
-  { id: 'slot-wed-2', day: 3, start: '14:35', end: '15:00', restricted: false, energy: 'low' },
-  { id: 'slot-thu-1', day: 4, start: '07:40', end: '08:00', restricted: false, energy: 'normal' },
-  { id: 'slot-thu-2', day: 4, start: '10:30', end: '12:25', restricted: false, reserved: 'large', energy: 'high' },
-  { id: 'slot-fri-1', day: 5, start: '11:35', end: '12:35', restricted: false, reserved: 'large', energy: 'high' },
-  { id: 'slot-sat-1', day: 6, start: '10:00', end: '11:00', restricted: true, energy: 'normal' },
+  { id: 'slot-mon-1', day: 1, start: '07:40', end: '08:00', restricted: false },
+  { id: 'slot-mon-2', day: 1, start: '10:30', end: '10:45', restricted: false },
+  { id: 'slot-mon-3', day: 1, start: '14:35', end: '15:00', restricted: false },
+  { id: 'slot-tue-1', day: 2, start: '10:30', end: '10:45', restricted: false },
+  { id: 'slot-tue-2', day: 2, start: '14:35', end: '15:00', restricted: false },
+  { id: 'slot-tue-3', day: 2, start: '19:00', end: '20:00', restricted: true },
+  { id: 'slot-wed-1', day: 3, start: '07:40', end: '08:00', restricted: false },
+  { id: 'slot-wed-2', day: 3, start: '14:35', end: '15:00', restricted: false },
+  { id: 'slot-thu-1', day: 4, start: '07:40', end: '08:00', restricted: false },
+  { id: 'slot-thu-2', day: 4, start: '10:30', end: '12:25', restricted: false },
+  { id: 'slot-fri-1', day: 5, start: '11:35', end: '12:35', restricted: false },
+  { id: 'slot-sat-1', day: 6, start: '10:00', end: '11:00', restricted: true },
 ];
 const DEFAULT_REC_DAILY = [];
 const DEFAULT_REC_WEEKLY = [
@@ -52,41 +72,13 @@ function timeToMin(t){ const [h,m]=t.split(':').map(Number); return h*60+m; }
 function minToLabel(mins){ let h=Math.floor(mins/60), m=mins%60; const ampm=h>=12?'pm':'am'; let h12=h%12; if(h12===0)h12=12; return `${h12}:${String(m).padStart(2,'0')}${ampm}`; }
 function formatShortDate(dateStr){ const d = parseDateStr(dateStr); return `${DAY_SHORT[d.getDay()]} ${d.getDate()}`; }
 function formatDurationHM(mins){ if (mins<=0) return '0m'; const h=Math.floor(mins/60), m=mins%60; if (h===0) return `${m}m`; if (m===0) return `${h}h`; return `${h}h ${m}m`; }
-// energy: a slot's focus quality. intensity: how demanding a task is. The scheduler
-// prefers to match demanding work to high-energy slots (see energyMatch), but only as a
-// soft preference layered inside the existing hard slot rules — nothing ever fails to
-// place just because no matching-energy slot is free.
-const ENERGY_LEVELS = ['high','normal','low'];
-const INTENSITY_LEVELS = ['demanding','normal','light'];
-const ENERGY_META = {
-  high:   { label:'High focus', dot:'bg-violet-500', soft:'text-violet-600', chip:'bg-violet-50 text-violet-700 border-violet-200' },
-  normal: { label:'Normal',     dot:'bg-slate-300', soft:'text-slate-500', chip:'bg-slate-50 text-slate-600 border-slate-200' },
-  low:    { label:'Low energy', dot:'bg-teal-400',  soft:'text-teal-600',  chip:'bg-teal-50 text-teal-700 border-teal-200' },
-};
-const INTENSITY_META = {
-  demanding: { label:'Demanding', short:'Demanding', chip:'bg-violet-50 text-violet-700 border-violet-200' },
-  normal:    { label:'Normal',    short:'Normal',    chip:'bg-slate-50 text-slate-600 border-slate-200' },
-  light:     { label:'Light',     short:'Light',     chip:'bg-teal-50 text-teal-700 border-teal-200' },
-};
-// Compact labels for tight 3-button rows (the daily energy check-in); ENERGY_META's own
-// labels ("High focus", "Low energy") read better in chips/selects than squeezed buttons.
-const ENERGY_SHORT = { high:'High', normal:'Normal', low:'Low' };
-// A demanding task WANTS a high-energy slot; a light task is ideal in a low-energy slot.
-// Returns true when task intensity matches slot energy for pass-1 (preferred) placement.
-function energyMatch(task, slot){
-  const energy = slot.energy || 'normal';
-  const intensity = task.intensity || 'normal';
-  if (energy==='high') return intensity==='demanding'; // protect high slots for demanding work
-  if (energy==='low')  return intensity!=='demanding'; // low slots suit light/normal, keep demanding away
-  return true; // normal slots: any task is a fine match
-}
 let idSeq = 0;
 function genId(){ idSeq += 1; return 'id-'+Date.now().toString(36)+'-'+idSeq; }
 /* ============================================================
    Scheduling engine (verified separately with node before wiring into the UI)
    ============================================================ */
-function makeTask({ title, duration, dueDate, recurringId=null, source='adhoc', pressing=false, order, preference=null, intensity='normal' }){
-  return { id: genId(), title, duration: Number(duration), dueDate, pressing, done:false, doneAt:null, createdAt: order, source, recurringId, preference, intensity, actualMinutes:null, wasRepacked: false };
+function makeTask({ title, duration, dueDate, recurringId=null, source='adhoc', pressing=false, order, preference=null }){
+  return { id: genId(), title, duration: Number(duration), dueDate, pressing, done:false, doneAt:null, createdAt: order, source, recurringId, preference, actualMinutes:null, pinnedTo: null };
 }
 function generateRecurringInstances(existingTasks, recDaily, recWeekly, now, lastGenWeek){
   const newTasks = [];
@@ -96,6 +88,13 @@ function generateRecurringInstances(existingTasks, recDaily, recWeekly, now, las
   let start = lastGenWeek ? addDays(parseDateStr(lastGenWeek), 7) : thisWeekMonday;
   const maxBack = addDays(thisWeekMonday, -8*7);
   if (start < maxBack) start = maxBack;
+  // Always (re)cover the CURRENT week, even when it has already been generated once.
+  // Without this clamp, `start` lands on next Monday as soon as this week has been
+  // generated, the loop below never executes, and a recurring task ADDED MID-WEEK
+  // produces nothing until the following Monday — it just silently doesn't appear.
+  // Re-running the current week is safe and idempotent: every candidate is checked
+  // against `existingKeys` first, so nothing is ever duplicated.
+  if (start > thisWeekMonday) start = thisWeekMonday;
   let order = Date.now();
   for (let wm = new Date(start); wm <= thisWeekMonday; wm = addDays(wm,7)){
     for (let i=0;i<7;i++){
@@ -126,31 +125,6 @@ function generateRecurringInstances(existingTasks, recDaily, recWeekly, now, las
 }
 const MIN_CHUNK = 5; // minutes — never carve off a sliver smaller than this when splitting a task
 /*
-  REPACKING ENGINE — retained as a no-op passthrough for compatibility, but no longer
-  does anything, because it's now fully redundant.
-  ================================================================================
-  Previously this ran BEFORE buildSchedule to forcibly collapse a split task's pending
-  sessions into one block whenever a single slot big enough for the whole remainder
-  existed. That made sense under the old "carve once, fixed forever" sessions model,
-  where buildSchedule itself would never reconsider an already-split task's shape.
-
-  Under the FLUID REMAINING-WORK MODEL (see buildSchedule), every task's not-yet-done
-  work is recarved fresh on every render anyway — buildSchedule will naturally place a
-  task's whole remaining duration into one slot if a big-enough slot is available and
-  priority order allows it, with no separate "repacking" pre-pass required. Keeping a
-  forced collapse here would just be redundant extra work, and risks producing a
-  `wasRepacked` session shape that fights with what buildSchedule would compute anyway.
-
-  wasRepacked itself no longer corresponds to a meaningful discrete event under the
-  fluid model (reshaping now happens continuously, not as an occasional "repack"), so
-  this always returns tasks unchanged and wasRepacked simply stays false going forward.
-  The field and its small UI indicator are left in place rather than torn out, in case
-  a future scheduling mode wants to reintroduce a discrete repack signal.
-*/
-function attemptRepacking(tasks, slots){
-  return tasks;
-}
-/*
   SESSIONS MODEL (carve once, then fixed forever)
   ------------------------------------------------
   A task may carry `sessions`: an ordered array of { id, minutesTotal, done, doneAt }.
@@ -176,7 +150,7 @@ function attemptRepacking(tasks, slots){
   computeWorkload below. Always false for the baseline diagnostic pass so the traffic
   light's own read never depends on whether it has already unlocked anything.
 */
-function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=false, demotedTaskIds=null){
+function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockRestricted=false, demotedTaskIds=null){
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayStr = toDateStr(today);
   const nowMin = now.getHours()*60+now.getMinutes();
@@ -190,7 +164,7 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
       if (slot.day===dow){
         const startMin=timeToMin(slot.start), endMin=timeToMin(slot.end);
         if (dateStr===todayStr && endMin<=nowMin) return;
-        instances.push({ key: slot.id+'|'+dateStr, slotId:slot.id, date:dateStr, dayOfWeek:dow, start:slot.start, end:slot.end, startMin, endMin, restricted:slot.restricted, reserved:slot.reserved||null, energy:slot.energy||'normal', remaining:endMin-startMin, assigned:[] });
+        instances.push({ key: slot.id+'|'+dateStr, slotId:slot.id, date:dateStr, dayOfWeek:dow, start:slot.start, end:slot.end, startMin, endMin, restricted:slot.restricted, remaining:endMin-startMin, assigned:[] });
       }
     });
   }
@@ -198,35 +172,25 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
   const instanceIndexOf = new Map(instances.map((inst,idx)=>[inst,idx]));
 
   const isUrgent = t => t.pressing || (t.dueDate && t.dueDate<todayStr);
-  const isLargeUndated = t => t.duration>=LARGE_THRESHOLD && !t.dueDate;
   const prefRank = t => t.preference==='earliest' ? -1 : (t.preference==='latest' ? 1 : 0);
   const isOverdue = t => t.dueDate && t.dueDate<todayStr;
 
   /*
-    STRICT vs RELAXED reserved/restricted eligibility -- closes a real gap: a large,
-    due-dated task at genuine risk of missing its deadline (critical slack) had NO
-    path into reserved "large task" slots at all, because reserved-slot access only
-    checked isUrgent (overdue/pressing) or isLargeUndated (large AND no due date
-    whatsoever). A large task WITH a due date, not yet overdue, not pressing, fell
-    through the cracks completely -- even when a reserved slot was the only place
-    big enough to fit it before its deadline. This is exactly the "Interview Prep"
-    pattern: fragmented into slivers across small open slots, spilling past its own
-    due date, while a much bigger reserved slot sat unavailable to it the whole time.
-
-    Fix: slack is computed ONCE under STRICT eligibility (avoids circularity -- slack
-    must exist before we can ask "is this task critical"). If strict-eligibility
-    slack is at or below zero, the task is CRITICAL, and only then does it gain the
-    SAME relaxed access an overdue/pressing task already has, for actual PLACEMENT.
-    This can never make a task worse off than before -- it only opens additional
-    slots to a task that was otherwise mathematically going to miss its own deadline.
+    STRICT vs RELAXED restricted-slot eligibility -- a due-dated task at genuine risk
+    of missing its deadline (critical slack) gains the same relaxed access to
+    restricted (catch-up-only) slots that an overdue/pressing task already has, for
+    actual PLACEMENT. Slack is computed ONCE under STRICT eligibility (avoids
+    circularity -- slack must exist before we can ask "is this task critical"). If
+    strict-eligibility slack is at or below zero, the task is CRITICAL. This can
+    never make a task worse off than before -- it only opens additional slots to a
+    task that was otherwise mathematically going to miss its own deadline.
   */
   function eligibleMinutesBeforeStrict(task, dueDateStr){
     let total = 0;
     for (const inst of instances){
       if (inst.date > dueDateStr) continue;
       const canUseRestricted = inst.restricted ? isUrgent(task) : true;
-      const canUseReserved = inst.reserved==='large' ? (isUrgent(task) || isLargeUndated(task)) : true;
-      if (!canUseRestricted || !canUseReserved) continue;
+      if (!canUseRestricted) continue;
       total += inst.endMin - inst.startMin;
     }
     return total;
@@ -246,7 +210,7 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
   };
   // isCritical: strict-eligibility slack is at or below zero -- this task cannot
   // make its own deadline under the old rules alone. hasSpecialAccess grants the
-  // SAME relaxed reserved/restricted access an overdue/pressing task already has to
+  // SAME relaxed restricted-slot access an overdue/pressing task already has to
   // any critical due-dated task too, used for actual PLACEMENT decisions below.
   const isCritical = t => { const s = slackOf(t); return s !== null && s <= 0; };
   const hasSpecialAccess = t => isUrgent(t) || isCritical(t);
@@ -335,7 +299,45 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
     return freeform.get(task.id).length===0;
   }
 
-  function tryPlaceOne(inst, task){
+  /*
+    PLACEMENT NARRATIVE — the scheduler already knows exactly WHY each task landed
+    where it did (priority tier, slack, criticality, demotion, pin, which pass claimed
+    it), but until now it threw all of that away the moment placement finished. This
+    turns that reasoning into a plain-English sentence attached to each assignment, so
+    a surprising schedule can be interrogated instead of just stared at.
+
+    `kind` is supplied by the call site and says WHICH PASS placed the task; everything
+    else is derived from the task's own standing at this moment.
+  */
+  function placementNarrative(task, inst, kind){
+    if (kind==='pinned'){
+      return 'Pinned here manually. It overrides the scheduler — click the pin icon to release it.';
+    }
+    const tier = priorityTier(task);
+    const slack = slackOf(task);
+    const slotDesc = inst.restricted
+      ? (unlockRestricted ? 'a catch-up block, unlocked because things are tight' : 'a catch-up block')
+      : 'the earliest open block with room';
+
+    if (tier===4){
+      return `Pushed down the queue on purpose: it was using capacity that a task with a real deadline needed. Landed in ${slotDesc}.`;
+    }
+    if (tier===0){
+      const days = slack!==null ? Math.round(slack) : null;
+      return `Top priority — due ${formatShortDate(task.dueDate)} with only ${days!==null?days:'0'} spare minutes of eligible time before then, so it gets first claim. Placed in ${slotDesc}.`;
+    }
+    if (tier===1){
+      if (isOverdue(task)) return `Overdue (was due ${formatShortDate(task.dueDate)}), so it's treated as urgent and can use catch-up blocks. Placed in ${slotDesc}.`;
+      return `Marked pressing, so it's treated as urgent and can use catch-up blocks. Placed in ${slotDesc}.`;
+    }
+    if (tier===2){
+      const spare = slack!==null ? ` (about ${Math.round(slack)} spare minutes of eligible time before then)` : '';
+      return `Due ${formatShortDate(task.dueDate)}${spare}. Given ${slotDesc} after anything more urgent was placed.`;
+    }
+    return `No due date, so it fills in around dated work. Given ${slotDesc}.`;
+  }
+
+  function tryPlaceOne(inst, task, ignoreLookahead=false, kind='normal'){
     // Every task's pending work is freeform now — carving is always allowed, every
     // render, so higher-priority tasks can always claim the earliest slot and push
     // lower-priority remaining work later or into a different shape.
@@ -343,7 +345,7 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
     if (!pieces.length) return false;
     const front = pieces[0];
     if (front.minutesTotal <= inst.remaining){
-      inst.assigned.push({ ...task, id: task.id, sessionId: front.id, duration: front.minutesTotal });
+      inst.assigned.push({ ...task, id: task.id, sessionId: front.id, duration: front.minutesTotal, placementReason: placementNarrative(task, inst, kind) });
       inst.remaining -= front.minutesTotal;
       pieces.shift();
       return true;
@@ -374,11 +376,11 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
       Every other task — overdue, pressing, or simply due-dated — always carves
       immediately to fit whatever slot the priority walk currently offers it.
     */
-    if (priorityTier(task)===2 && !task.dueDate && inst.remaining >= MIN_CHUNK){
+    if (!ignoreLookahead && priorityTier(task)===2 && !task.dueDate && inst.remaining >= MIN_CHUNK){
       const instIdx = instanceIndexOf.get(inst);
       const laterFit = instances.find((later, idx) => {
         if (idx <= instIdx) return false; // only look forward from here
-        if (later.restricted || later.reserved) return false; // don't defer into special slots on a hunch
+        if (later.restricted) return false; // don't defer into special slots on a hunch
         return later.remaining >= front.minutesTotal;
       });
       if (laterFit) return false; // hold this piece back; a better slot exists later
@@ -389,7 +391,7 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
       const carvedId = genId();
       const remainderId = genId();
       pieces.splice(0, 1, { id: carvedId, minutesTotal: carvedMinutes }, { id: remainderId, minutesTotal: remainderMinutes });
-      inst.assigned.push({ ...task, id: task.id, sessionId: carvedId, duration: carvedMinutes });
+      inst.assigned.push({ ...task, id: task.id, sessionId: carvedId, duration: carvedMinutes, placementReason: placementNarrative(task, inst, kind) });
       inst.remaining -= carvedMinutes;
       pieces.shift();
       return true;
@@ -398,80 +400,84 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
   }
 
   /*
-    TWO-PASS PLACEMENT — fixes "open slots left empty while a catch-up/reserved slot
-    earlier in the week grabs ordinary tasks" (the bug this file was created to fix).
+    PASS 0 — MANUAL PINS (drag-and-drop overrides).
+    ------------------------------------------------
+    A task with `pinnedTo: { slotId, date }` was manually dragged into that specific
+    slot instance by the user. Manual intent beats every automatic rule, so pins are
+    honoured FIRST, before any priority-based placement, and they bypass:
+      - restricted ("catch-up only") gating — you explicitly chose this block
+      - the lookahead deferral heuristic — you asked for HERE, not "somewhere nicer"
+      - priority ordering — a pinned task claims its slot even if something more
+        urgent would otherwise have taken that space
+
+    A pin is a request for a STARTING point, not a guarantee the whole task fits: as
+    much of the task's remaining work as the slot can hold is placed there, and any
+    remainder flows through the normal passes below exactly as usual. This keeps pins
+    from ever "losing" work — you can pin a 90-minute task into a 20-minute block and
+    it simply starts there and continues elsewhere.
+
+    Stale pins (slot deleted, or date now in the past) simply never match an instance
+    and are ignored here; they're cleaned off the task separately in the UI layer.
+  */
+  for (const inst of instances){
+    for (const task of sortedTasks){
+      if (!task.pinnedTo) continue;
+      if (task.pinnedTo.slotId !== inst.slotId || task.pinnedTo.date !== inst.date) continue;
+      if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
+      tryPlaceOne(inst, task, true, 'pinned');
+    }
+  }
+
+  /*
+    TWO-PASS PLACEMENT — fixes "open slots left empty while a catch-up slot earlier
+    in the week grabs ordinary tasks".
 
     Previously this was a single chronological pass: whichever slot came first in date
     order got first refusal on every task, including plain/generic ones. That let an
-    unlocked catch-up slot (or a reserved "large tasks" slot with room to spare) sitting
-    earlier in the week soak up ordinary undated tasks before the walk ever reached a
-    perfectly good OPEN slot later on — even though the open slot needed no unlocking
-    and was an equally good (often better) home for that task. This is exactly what was
-    happening in the real schedule: catch-up-only blocks on Saturday/Tuesday evening were
-    absorbing everyday tasks while genuinely open Wednesday slots sat empty.
+    unlocked catch-up slot sitting earlier in the week soak up ordinary undated tasks
+    before the walk ever reached a perfectly good OPEN slot later on — even though the
+    open slot needed no unlocking and was an equally good (often better) home for that
+    task. This is exactly what was happening in the real schedule: catch-up-only blocks
+    on Saturday/Tuesday evening were absorbing everyday tasks while genuinely open
+    Wednesday slots sat empty.
 
     Fix: two full chronological passes over every instance.
       PASS 1 — each slot type takes only ITS OWN native category:
         - restricted (locked or unlocked): urgent tasks only
-        - reserved 'large':                urgent or large-undated tasks only
-        - open:                            ANY task — this is the real fallback capacity
+        - open (including the former "large tasks" focus blocks): ANY task — this is
+          the real fallback capacity
       PASS 2 — now that every open slot in the whole window has had first claim on
-      generic tasks, sweep again and let unlocked-restricted / reserved-large slots
-      absorb whatever generic tasks are STILL unplaced, using their leftover room.
+      generic tasks, sweep again and let unlocked-restricted slots absorb whatever
+      generic tasks are STILL unplaced, using their leftover room.
 
-    Net effect: a restricted-but-unlocked or reserved slot can never take an ordinary
-    task away from an open slot elsewhere in the same scheduling window — it only ever
-    catches genuine overflow that open slots couldn't fit anywhere. Urgent placement,
-    energy-matching preference, and session-carving rules are completely unchanged;
-    only the ORDER in which "anything goes" fallback capacity is offered has moved.
+    Net effect: a restricted-but-unlocked slot can never take an ordinary task away
+    from an open slot elsewhere in the same scheduling window — it only ever catches
+    genuine overflow that open slots couldn't fit anywhere. Urgent placement and
+    session-carving rules are completely unchanged; only the ORDER in which "anything
+    goes" fallback capacity is offered has moved.
 
     Verified with an isolated test harness: a 10-check regression suite (urgent/overdue
-    access, energy matching, session carving, reserved-slot priority, minute
-    conservation), a 500-trial randomized invariant fuzz test (no dropped tasks, no
-    over-allocated slots), and a 1000-trial seeded comparison against the original
-    single-pass logic showing zero cases where this fix places MORE generic work into
-    restricted/reserved slots than before (157 trials strictly better, rest tied).
+    access, session carving, minute conservation), a 500-trial randomized invariant
+    fuzz test (no dropped tasks, no over-allocated slots), and a 1000-trial seeded
+    comparison against the original single-pass logic showing zero cases where this
+    fix places MORE generic work into restricted slots than before (157 trials
+    strictly better, rest tied).
   */
   // ---- PASS 1: native category only per slot type ----
-  // NOTE: reserved/restricted eligibility here uses hasSpecialAccess (isUrgent OR
-  // critical due-date slack), not plain isUrgent -- see the STRICT vs RELAXED
-  // eligibility comment above. This is what actually lets a critical, large,
-  // due-dated task land in a reserved "big tasks" slot instead of being fragmented
-  // into slivers across small open slots and missing its own deadline.
+  // NOTE: restricted eligibility here uses hasSpecialAccess (isUrgent OR critical
+  // due-date slack), not plain isUrgent -- see the STRICT vs RELAXED eligibility
+  // comment above.
   for (const inst of instances){
     if (inst.restricted){
-      // Locked or unlocked, pass 1 only ever serves urgent/critical tasks here --
-      // energy match preferred first, then any qualifying task regardless of energy.
-      for (const task of sortedTasks){
-        if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
-        if (!hasSpecialAccess(task) || !energyMatch(task, inst)) continue;
-        tryPlaceOne(inst, task);
-      }
+      // Locked or unlocked, pass 1 only ever serves urgent/critical tasks here.
       for (const task of sortedTasks){
         if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
         if (!hasSpecialAccess(task)) continue;
         tryPlaceOne(inst, task);
       }
-    } else if (inst.reserved==='large'){
-      for (const task of sortedTasks){ // big/urgent/critical + energy-matched first
-        if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
-        if (!(hasSpecialAccess(task) || isLargeUndated(task)) || !energyMatch(task, inst)) continue;
-        tryPlaceOne(inst, task);
-      }
-      for (const task of sortedTasks){ // big/urgent/critical, any energy
-        if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
-        if (!(hasSpecialAccess(task) || isLargeUndated(task))) continue;
-        tryPlaceOne(inst, task);
-      }
-      // The old "leftover space, energy-matched / anything" fallback for reserved
-      // slots is deliberately deferred to PASS 2 below — see rationale above.
     } else {
-      // genuinely open slots: the real fallback capacity. Energy-matched first, then anything.
-      for (const task of sortedTasks){
-        if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
-        if (!energyMatch(task, inst)) continue;
-        tryPlaceOne(inst, task);
-      }
+      // genuinely open slots (including the former "large tasks" focus blocks): the
+      // real fallback capacity — any eligible task, in priority order.
       for (const task of sortedTasks){
         if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
         tryPlaceOne(inst, task);
@@ -479,23 +485,13 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
     }
   }
 
-  // ---- PASS 2: unlocked-restricted / reserved-large slots absorb remaining overflow ----
+  // ---- PASS 2: unlocked-restricted slots absorb remaining overflow ----
   // Only reached for tasks that pass 1 (across the ENTIRE window, including every open
   // slot) could not place. Chronological order still applies within this pass, so
   // earlier leftover room is still used before later leftover room.
   for (const inst of instances){
     if (inst.restricted && unlockRestricted){
       for (const task of sortedTasks){
-        if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
-        tryPlaceOne(inst, task);
-      }
-    } else if (inst.reserved==='large'){
-      for (const task of sortedTasks){ // leftover space, energy-matched
-        if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
-        if (!energyMatch(task, inst)) continue;
-        tryPlaceOne(inst, task);
-      }
-      for (const task of sortedTasks){ // leftover space, anything
         if (isTaskFullyPlaced(task) || inst.remaining<=0) continue;
         tryPlaceOne(inst, task);
       }
@@ -530,7 +526,13 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
     inst.assigned = inst.assigned.map(item=>{
       const task = sortedTasks.find(t=>t.id===item.id);
       const count = sessionCountFor(task);
-      return { ...item, isPartial: count>1, chunkIndex: sessionIndexFor(task, item.sessionId), chunkCount: count };
+      const idx = sessionIndexFor(task, item.sessionId);
+      // Splitting is often the most surprising thing the scheduler does, so it's
+      // spelled out explicitly rather than left to the terse "2·15m" chip.
+      const chunkNote = count>1
+        ? ` This is part ${idx} of ${count} — the ${task.duration}min task was split because no single block had room for all of it.`
+        : '';
+      return { ...item, isPartial: count>1, chunkIndex: idx, chunkCount: count, placementReason: (item.placementReason||'') + chunkNote };
     });
   }
 
@@ -583,7 +585,7 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=3, unlockRestricted=fal
   deterministic, and directly closes the gap found in testing without attempting a
   full (NP-hard) optimal multi-task deadline solver.
 */
-function computeEligibleMinutesBeforeStandalone(task, dueDateStr, slots, now, weeksAhead, isUrgentFn, isLargeUndatedFn){
+function computeEligibleMinutesBeforeStandalone(task, dueDateStr, slots, now, weeksAhead, isUrgentFn){
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayStr = toDateStr(today);
   const nowMin = now.getHours()*60+now.getMinutes();
@@ -598,19 +600,17 @@ function computeEligibleMinutesBeforeStandalone(task, dueDateStr, slots, now, we
       const startMin=timeToMin(slot.start), endMin=timeToMin(slot.end);
       if (dateStr===todayStr && endMin<=nowMin) continue;
       const canUseRestricted = slot.restricted ? isUrgentFn(task) : true;
-      const canUseReserved = slot.reserved==='large' ? (isUrgentFn(task) || isLargeUndatedFn(task)) : true;
-      if (!canUseRestricted || !canUseReserved) continue;
+      if (!canUseRestricted) continue;
       total += endMin - startMin;
     }
   }
   return total;
 }
 
-function buildSchedule(tasks, slots, now, weeksAhead=3, unlockRestricted=false){
+function buildSchedule(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockRestricted=false){
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayStr = toDateStr(today);
   const isUrgentFn = t => t.pressing || (t.dueDate && t.dueDate<todayStr);
-  const isLargeUndatedFn = t => t.duration>=LARGE_THRESHOLD && !t.dueDate;
 
   const passA = buildScheduleOnce(tasks, slots, now, weeksAhead, unlockRestricted, null);
 
@@ -625,7 +625,7 @@ function buildSchedule(tasks, slots, now, weeksAhead=3, unlockRestricted=false){
       : 0;
     const remaining = Math.max(0, task.duration - remainingDone);
     if (remaining<=0) continue; // already fully done
-    const eligible = computeEligibleMinutesBeforeStandalone(task, task.dueDate, slots, now, weeksAhead, isUrgentFn, isLargeUndatedFn);
+    const eligible = computeEligibleMinutesBeforeStandalone(task, task.dueDate, slots, now, weeksAhead, isUrgentFn);
     if (eligible < remaining) continue; // never achievable even alone — pass A's overflow is correct, nothing to fix
 
     // Did it fully place on or before its due date in pass A?
@@ -719,21 +719,86 @@ function applyAutoExpiry(tasks, recDaily, todayStr){
   return changed ? next : tasks;
 }
 /*
+  Stale pin cleanup — a manual drag-and-drop pin points at one specific slot instance
+  ({ slotId, date }). That target can stop existing for two ordinary reasons:
+    1. the date has passed (the block came and went), or
+    2. the slot itself was deleted in Settings.
+  Either way the pin can never be honoured again, so it's cleared off the task and the
+  task rejoins normal automatic scheduling rather than silently carrying a dead pin
+  forever. Runs on the same cadence as applyAutoExpiry.
+*/
+function clearStalePins(tasks, slots, todayStr){
+  let changed = false;
+  const liveSlotIds = new Set(slots.map(s=>s.id));
+  const next = tasks.map(t=>{
+    if (!t.pinnedTo) return t;
+    const expired = t.pinnedTo.date < todayStr;
+    const slotGone = !liveSlotIds.has(t.pinnedTo.slotId);
+    if (expired || slotGone){
+      changed = true;
+      return { ...t, pinnedTo: null };
+    }
+    return t;
+  });
+  return changed ? next : tasks;
+}
+/*
   Live completion stats — derived straight from tasks, never a separate log. A task
   counts once, on the calendar day its doneAt was set (for a split task, that's the day
   the LAST session was completed). Un-completing something removes it from the count on
   the next render, since these are always a reflection of current state, not history.
 */
-function computeStats(tasks, now){
+/*
+  COMPLETION RECORDS + ARCHIVING
+  --------------------------------
+  Completed tasks used to live in `tasks` forever — nothing ever removed them. Over a
+  school year that's thousands of dead objects riding along in every localStorage write
+  and being re-filtered by every scheduler pass, purely so the stats bar can count them.
+
+  Fix: a completed task older than ARCHIVE_AFTER_DAYS is compacted into a small
+  COMPLETION RECORD and moved out of `tasks` into `archive`. The record keeps exactly
+  what the stats and trends views need (when it was done, estimated vs actual minutes,
+  whether it was recurring) and drops everything the scheduler needed but history
+  doesn't — sessions, pins, preferences, due dates.
+
+  Everything that reports on completions reads the UNION of live-completed tasks and
+  archived records via completionRecords(), so archiving never changes a single number
+  on screen; it only stops the live list from growing without bound.
+*/
+function toCompletionRecord(task){
+  return {
+    id: task.id,
+    title: task.title,
+    doneAt: task.doneAt,
+    duration: task.duration,
+    actualMinutes: getActualMinutes(task),
+    recurringId: task.recurringId || null,
+  };
+}
+function completionRecords(tasks, archive){
+  const live = tasks.filter(t=>t.done && t.doneAt).map(toCompletionRecord);
+  return [...archive, ...live];
+}
+function archiveOldCompleted(tasks, archive, nowMs){
+  const cutoff = nowMs - ARCHIVE_AFTER_DAYS*24*60*60*1000;
+  const isStale = t => t.done && t.doneAt && t.doneAt < cutoff;
+  const stale = tasks.filter(isStale);
+  if (!stale.length) return null; // nothing to do — caller keeps existing state
+  return {
+    tasks: tasks.filter(t=>!isStale(t)),
+    archive: [...archive, ...stale.map(toCompletionRecord)],
+  };
+}
+function computeStats(records, now){
   const todayStr = toDateStr(now);
   const weekStartStr = toDateStr(startOfWeek(now));
   const weekEndStr = toDateStr(addDays(startOfWeek(now),6));
   const monthPrefix = todayStr.slice(0,7);
   const yearPrefix = todayStr.slice(0,4);
   let day=0, week=0, month=0, year=0;
-  for (const t of tasks){
-    if (!t.done || !t.doneAt) continue;
-    const dStr = toDateStr(new Date(t.doneAt));
+  for (const r of records){
+    if (!r.doneAt) continue;
+    const dStr = toDateStr(new Date(r.doneAt));
     if (dStr === todayStr) day++;
     if (dStr >= weekStartStr && dStr <= weekEndStr) week++;
     if (dStr.slice(0,7) === monthPrefix) month++;
@@ -746,6 +811,8 @@ function computeStats(tasks, now){
   getActualMinutes: total logged actual time for a task. For a split task this only
   counts if EVERY session has logged time — partial data would make the comparison
   misleading, so an incomplete task is simply excluded rather than under-counted.
+  Archived completion records have no sessions, so this falls through to their flat
+  actualMinutes field — the same function works for both shapes.
 */
 function getActualMinutes(task){
   if (task.sessions && task.sessions.length){
@@ -754,19 +821,19 @@ function getActualMinutes(task){
   }
   return task.actualMinutes;
 }
-function computeAccuracy(tasks){
-  const withData = tasks.filter(t=>t.done && getActualMinutes(t)!=null && t.duration>0);
+function computeAccuracy(records){
+  const withData = records.filter(r=>r.actualMinutes!=null && r.duration>0);
   if (!withData.length) return null;
-  const totalEstimate = withData.reduce((s,t)=>s+t.duration,0);
-  const totalActual = withData.reduce((s,t)=>s+getActualMinutes(t),0);
+  const totalEstimate = withData.reduce((s,r)=>s+r.duration,0);
+  const totalActual = withData.reduce((s,r)=>s+r.actualMinutes,0);
   return { count: withData.length, ratio: totalActual/totalEstimate };
 }
-function computeWeeklyVolume(tasks, weekStartKeys){
+function computeWeeklyVolume(records, weekStartKeys){
   return weekStartKeys.map(wk=>{
     const wkEnd = toDateStr(addDays(parseDateStr(wk),6));
-    const count = tasks.filter(t=>{
-      if (!t.done || !t.doneAt) return false;
-      const dStr = toDateStr(new Date(t.doneAt));
+    const count = records.filter(r=>{
+      if (!r.doneAt) return false;
+      const dStr = toDateStr(new Date(r.doneAt));
       return dStr>=wk && dStr<=wkEnd;
     }).length;
     return { weekStart: wk, count };
@@ -791,7 +858,18 @@ function computeWeeklyVolume(tasks, weekStartKeys){
   flex slots, minus what your recurring dailies/weeklies already claim every week. If
   the overflow is at least that big, clearing it would genuinely take more than another
   full week at your normal pace — that's "red". Anything less than that, but still
-  above zero, is "orange". Zero overflow is "green".
+  above zero, is "orange".
+
+  UTILISATION / THE 80% RULE: overflow alone only fires once work is ALREADY spilling
+  past the week — by which point you have no room to absorb a sick day, a parent
+  meeting, or a task running long. Utilisation answers the earlier question: how full
+  is the flex time you have LEFT this week? (Past slots are already excluded from the
+  schedule's instances, so mid-week this naturally reads as remaining capacity.)
+  Crossing HIGH_UTILISATION turns the light orange BEFORE anything overflows, so a
+  week that's technically fitting but has no slack still announces itself.
+
+  Note this deliberately does NOT change what unlocks catch-up blocks — that's still
+  driven by 'red' and due-date risk only. The 80% rule is a warning, not an action.
 */
 function computeWorkload(tasks, baselineSchedule, slots, recDaily, recWeekly, now){
   const weekEndStr = toDateStr(addDays(startOfWeek(now),6));
@@ -806,14 +884,27 @@ function computeWorkload(tasks, baselineSchedule, slots, recDaily, recWeekly, no
   for (const item of baselineSchedule.overflow){
     if (!item.recurringId && countsTowardWeek(item)) overflowMinutes += item.duration;
   }
+  // How full is the flex time still ahead of us this week?
+  let remainingCapacityMinutes = 0, committedMinutes = 0;
+  for (const inst of baselineSchedule.instances){
+    if (inst.date > weekEndStr) continue;
+    remainingCapacityMinutes += inst.endMin - inst.startMin;
+    for (const item of inst.assigned) committedMinutes += item.duration;
+  }
+  const utilisation = remainingCapacityMinutes>0 ? committedMinutes/remainingCapacityMinutes : 0;
   const weeklyCapacityMinutes = slots.reduce((sum,s)=> sum + (timeToMin(s.end)-timeToMin(s.start)), 0);
   const recurringWeeklyMinutes = recDaily.reduce((sum,d)=> sum + d.duration*WEEKDAY_DAYS.length, 0) + recWeekly.reduce((sum,w)=> sum + w.duration, 0);
   const netWeeklyCapacityMinutes = Math.max(0, weeklyCapacityMinutes - recurringWeeklyMinutes);
   let level;
-  if (overflowMinutes <= 0) level = 'green';
-  else if (netWeeklyCapacityMinutes <= 0 || overflowMinutes >= netWeeklyCapacityMinutes) level = 'red';
-  else level = 'orange';
-  return { level, overflowMinutes, netWeeklyCapacityMinutes };
+  if (netWeeklyCapacityMinutes <= 0 || (overflowMinutes > 0 && overflowMinutes >= netWeeklyCapacityMinutes)) level = 'red';
+  else if (overflowMinutes > 0 || utilisation >= HIGH_UTILISATION) level = 'orange';
+  else level = 'green';
+  return {
+    level, overflowMinutes, netWeeklyCapacityMinutes,
+    utilisation, committedMinutes, remainingCapacityMinutes,
+    // true when the ONLY reason we're not green is running hot — no overflow yet.
+    tightButFitting: overflowMinutes<=0 && utilisation >= HIGH_UTILISATION,
+  };
 }
 /*
   Due-date risk — a SEPARATE, per-task trigger for the same catch-up unlock mechanism
@@ -858,22 +949,32 @@ function WorkloadIndicator({ workload }){
     { key:'orange', activeClass:'bg-orange-500', dimClass:'bg-orange-100' },
     { key:'green', activeClass:'bg-emerald-500', dimClass:'bg-emerald-100' },
   ];
-  const labels = { green: 'On track', orange: 'Getting full', red: 'Overloaded' };
-  const descriptions = {
-    green: 'Everything besides recurring tasks fits within this week.',
-    orange: `${formatDurationHM(workload.overflowMinutes)} of work is running past this week.`,
-    red: `${formatDurationHM(workload.overflowMinutes)} of work won't fit this week — catch-up sessions are open to anything until this clears.`,
-  };
+  const pct = Math.round(workload.utilisation*100);
+  // "Getting full" now covers two distinct situations, so the label and tooltip
+  // distinguish them: running hot with no overflow yet, vs actually spilling over.
+  const label = workload.level==='green' ? 'On track'
+    : workload.level==='red' ? 'Overloaded'
+    : workload.tightButFitting ? 'No slack left'
+    : 'Getting full';
+  const description = workload.level==='green'
+    ? `Everything besides recurring tasks fits this week, and you're using ${pct}% of your remaining flex time — there's room to absorb a surprise.`
+    : workload.tightButFitting
+      ? `Everything still fits, but you're committed to ${pct}% of your remaining flex time this week. One disruption and something will slip — worth deferring or trimming now, while you still have the choice.`
+      : workload.level==='red'
+        ? `${formatDurationHM(workload.overflowMinutes)} of work won't fit this week — catch-up sessions are open to anything until this clears.`
+        : `${formatDurationHM(workload.overflowMinutes)} of work is running past this week. You're at ${pct}% of remaining flex time.`;
   return (
-    <div className="flex items-center gap-2.5 px-3 py-2 rounded-2xl border border-slate-200 bg-white" title={descriptions[workload.level]}>
+    <div className="flex items-center gap-2.5 px-3 py-2 rounded-2xl border border-slate-200 bg-white" title={description}>
       <div className="flex flex-col gap-1 bg-slate-800 rounded-md px-1.5 py-1.5">
         {dotConfig.map(d=>(
           <span key={d.key} className={`w-2.5 h-2.5 rounded-full ${workload.level===d.key?d.activeClass:d.dimClass}`}></span>
         ))}
       </div>
       <div className="flex flex-col leading-tight">
-        <span className="text-xs font-semibold text-slate-700">{labels[workload.level]}</span>
-        <span className="text-xs text-slate-400">This week's load</span>
+        <span className="text-xs font-semibold text-slate-700">{label}</span>
+        <span className="text-xs text-slate-400">
+          {workload.remainingCapacityMinutes>0 ? `${pct}% of flex time left this week` : "This week's load"}
+        </span>
       </div>
     </div>
   );
@@ -890,35 +991,43 @@ function HeroCard({ currentInst, nextInst, onToggleDone, slotsUnlocked, atRiskId
   const label = currentInst ? 'RIGHT NOW' : 'NEXT UP';
   const timeLabel = currentInst ? `until ${minToLabel(inst.endMin)}` : `${DAY_SHORT[inst.dayOfWeek]} ${minToLabel(inst.startMin)}`;
   const isUnlockedRestricted = inst.restricted && slotsUnlocked;
-  const emptyColor = isUnlockedRestricted ? 'text-slate-400' : inst.restricted ? 'text-rose-300' : inst.reserved==='large' ? 'text-indigo-300' : 'text-slate-400';
+  const emptyColor = isUnlockedRestricted ? 'text-slate-400' : inst.restricted ? 'text-rose-300' : 'text-slate-400';
   return (
     <div key={inst.key} className="flap rounded-3xl px-6 py-7 bg-slate-900 shadow-lg shadow-slate-900/10">
       <div className="flex items-center justify-between mb-4">
         <Eyebrow className="text-amber-400">{label}</Eyebrow>
         <div className="flex items-center gap-2">
-          {inst.energy==='high' && <Zap className="w-3.5 h-3.5 text-violet-400" fill="currentColor"/>}
           <span className="font-mono-plex text-xs text-slate-400">{timeLabel}</span>
         </div>
       </div>
       {inst.assigned.length===0 ? (
         <div className={`text-sm py-2 ${emptyColor}`}>
-          {isUnlockedRestricted ? 'Open — catch-up slot unlocked while things are busy' : inst.restricted ? 'Catch-up block — nothing pressing right now' : inst.reserved==='large' ? 'Focus block — nothing big queued right now' : 'Open — nothing assigned yet'}
+          {isUnlockedRestricted ? 'Open — catch-up slot unlocked while things are busy' : inst.restricted ? 'Catch-up block — nothing pressing right now' : 'Open — nothing assigned yet'}
         </div>
       ) : (
         <div className="space-y-3">
           {inst.assigned.map(t=>{
             const isAtRisk = atRiskIds.has(t.id);
+            const isRecurring = !!t.recurringId;
+            // The hero card sits on a dark panel, so recurring uses a translucent
+            // emerald wash rather than the light-green fill used in the day columns.
+            // At-risk still wins — a warning outranks a category tint.
+            const rowTint = isAtRisk
+              ? 'bg-rose-500/10 border border-rose-500/30 rounded-xl px-3 py-2 -mx-3'
+              : isRecurring
+                ? 'bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-3 py-2 -mx-3'
+                : '';
             return (
-              <div key={inst.key+'|'+t.id} className={`flex items-start gap-3 ${isAtRisk?'bg-rose-500/10 border border-rose-500/30 rounded-xl px-3 py-2 -mx-3':''}`}>
+              <div key={inst.key+'|'+t.id} className={`flex items-start gap-3 ${rowTint}`}>
                 <button onClick={()=>onToggleDone(t.id, t.sessionId)} className={`w-7 h-7 mt-0.5 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${t.done?'bg-amber-400 border-amber-400':'border-slate-500 hover:border-amber-400'}`}>
                   {t.done && <Check className="w-4 h-4 text-slate-900"/>}
                 </button>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className={`text-lg font-medium ${t.done?'line-through text-slate-500':'text-white'}`}>{t.title}</span>
-                    {t.intensity==='demanding' && <Zap className="w-3.5 h-3.5 text-violet-400 shrink-0" fill="currentColor"/>}
                     {t.isPartial && <span className="font-mono-plex text-xs text-slate-400 shrink-0">part {t.chunkIndex} · {t.duration}min</span>}
                     {t.dueDate && t.dueDate<inst.date && <span className="text-amber-400 text-xs shrink-0">from {formatShortDate(t.dueDate)}</span>}
+                    {t.pinnedTo && t.pinnedTo.slotId===inst.slotId && t.pinnedTo.date===inst.date && <Pin className="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="currentColor"/>}
                     {t.pressing && <Star className="w-3.5 h-3.5 text-amber-400 shrink-0" fill="currentColor"/>}
                   </div>
                   {isAtRisk && (
@@ -935,12 +1044,12 @@ function HeroCard({ currentInst, nextInst, onToggleDone, slotsUnlocked, atRiskId
     </div>
   );
 }
-function DayColumn({ day, isToday, isNextWeekStart, onToggleDone, onDelete, onTogglePressing, slotsUnlocked, atRiskIds }){
+function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, onTogglePressing, onUnpin, slotsUnlocked, atRiskIds, draggingTaskId, onDragStartTask, onDragEndTask, dragOverKey, onDragOverSlot, onDropOnSlot, explainingKey, onToggleExplain }){
   const d = parseDateStr(day.date);
   return (
     <div className={`flex flex-col h-full rounded-2xl border overflow-hidden ${isToday?'border-amber-300 bg-amber-50/50':'border-slate-200 bg-white'}`}>
       <div className={`px-3 py-2.5 shrink-0 border-b ${isToday?'border-amber-200':'border-slate-100'}`}>
-        {isNextWeekStart && <div className="text-xs font-semibold text-indigo-400 uppercase tracking-widest mb-1">Next week</div>}
+        {weekLabel && <div className="text-xs font-semibold text-indigo-400 uppercase tracking-widest mb-1">{weekLabel}</div>}
         <div className={`text-xs font-semibold ${isToday?'text-amber-700':'text-slate-500'}`}>{DAY_NAMES[day.dayOfWeek]}{isToday?' · Today':''}</div>
         <div className="text-xs text-slate-400">{d.toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
       </div>
@@ -949,35 +1058,67 @@ function DayColumn({ day, isToday, isNextWeekStart, onToggleDone, onDelete, onTo
           <div className="text-xs text-slate-300 italic py-1 px-1">No flex blocks</div>
         ) : day.slots.map(inst=>{
           const isUnlockedRestricted = inst.restricted && slotsUnlocked;
+          const isDropTarget = dragOverKey===inst.key;
+          const capacityMinutes = inst.endMin - inst.startMin;
+          const usedMinutes = inst.assigned.reduce((sum,a)=>sum+a.duration, 0);
+          const freeMinutes = capacityMinutes - usedMinutes;
           return (
-            <div key={inst.key} className={`rounded-lg px-2 py-1.5 border ${
-              isUnlockedRestricted ? 'bg-rose-50/30 border-rose-200' :
-              inst.restricted ? 'bg-rose-50/70 border-rose-200 border-dashed' :
-              inst.reserved==='large' ? 'bg-indigo-50/70 border-indigo-200 border-dotted' :
-              'bg-slate-50 border-slate-100'
-            }`}>
+            <div
+              key={inst.key}
+              onDragOver={e=>{ e.preventDefault(); onDragOverSlot(inst.key); }}
+              onDrop={e=>{ e.preventDefault(); onDropOnSlot(inst.slotId, inst.date); }}
+              className={`rounded-lg px-2 py-1.5 border transition-colors ${
+                isDropTarget ? 'bg-amber-50 border-amber-400 border-2' :
+                isUnlockedRestricted ? 'bg-rose-50/30 border-rose-200' :
+                inst.restricted ? 'bg-rose-50/70 border-rose-200 border-dashed' :
+                'bg-slate-50 border-slate-100'
+              }`}>
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-1">
                   <span className="font-mono-plex text-xs text-slate-500">{minToLabel(inst.startMin)}</span>
-                  {inst.energy==='high' && <Zap className="w-3 h-3 text-violet-400" fill="currentColor"/>}
                 </div>
-                {isUnlockedRestricted && <span className="text-xs text-rose-500 font-medium">unlocked</span>}
+                <div className="flex items-center gap-1.5">
+                  {isUnlockedRestricted && <span className="text-xs text-rose-500 font-medium">unlocked</span>}
+                  {/* Capacity: makes wasted fragments visible — a block showing 5 of 25
+                      used is obviously leaking time in a way a bare task list isn't. */}
+                  <span
+                    className={`font-mono-plex text-xs ${usedMinutes===0 ? 'text-slate-300' : freeMinutes===0 ? 'text-emerald-600' : 'text-slate-400'}`}
+                    title={`${usedMinutes} of ${capacityMinutes} minutes used${freeMinutes>0?` — ${freeMinutes}min still free`:' — full'}`}>
+                    {usedMinutes}/{capacityMinutes}m
+                  </span>
+                </div>
               </div>
               <div className="space-y-2">
                 {inst.assigned.length===0 ? (
-                  <span className={`text-xs ${isUnlockedRestricted?'text-slate-300':inst.restricted?'text-rose-400':inst.reserved==='large'?'text-indigo-400':'text-slate-300'}`}>
-                    {isUnlockedRestricted ? 'Open' : inst.restricted?'Catch-up only':inst.reserved==='large'?'Big tasks':'Open'}
+                  <span className={`text-xs ${isDropTarget?'text-amber-600 font-medium':isUnlockedRestricted?'text-slate-300':inst.restricted?'text-rose-400':'text-slate-300'}`}>
+                    {isDropTarget ? 'Drop here' : isUnlockedRestricted ? 'Open' : inst.restricted?'Catch-up only':'Open'}
                   </span>
                 ) : inst.assigned.map(t=>{
                   const isAtRisk = atRiskIds.has(t.id);
+                  const isRecurring = !!t.recurringId;
+                  const isPinnedHere = t.pinnedTo && t.pinnedTo.slotId===inst.slotId && t.pinnedTo.date===inst.date;
+                  const isDragging = draggingTaskId===t.id;
+                  const explainKey = inst.key+'|'+t.sessionId;
+                  const isExplaining = explainingKey===explainKey;
+                  // At-risk (rose) deliberately wins over recurring (green): a warning
+                  // should never be hidden by a category tint.
+                  const rowTint = isAtRisk
+                    ? 'rounded-md px-1.5 py-1 -mx-1.5 bg-rose-50 border border-rose-200'
+                    : isRecurring
+                      ? 'rounded-md px-1.5 py-1 -mx-1.5 bg-emerald-50 border border-emerald-200'
+                      : '';
                   return (
-                    <div key={inst.key+'|'+t.id} className={isAtRisk ? 'rounded-md px-1.5 py-1 -mx-1.5 bg-rose-50 border border-rose-200' : ''}>
+                    <div
+                      key={inst.key+'|'+t.id}
+                      draggable
+                      onDragStart={e=>{ e.dataTransfer.effectAllowed='move'; onDragStartTask(t.id); }}
+                      onDragEnd={onDragEndTask}
+                      className={`cursor-grab active:cursor-grabbing ${isDragging?'opacity-40':''} ${rowTint}`}>
                       <div className="flex items-start gap-1.5">
                         <button onClick={()=>onToggleDone(t.id, t.sessionId)} className={`w-3.5 h-3.5 mt-0.5 rounded-full border shrink-0 flex items-center justify-center ${t.done?'bg-emerald-500 border-emerald-500':'border-slate-300'}`}>
                           {t.done && <Check className="w-2.5 h-2.5 text-white"/>}
                         </button>
                         <span className={`flex-1 min-w-0 break-words text-xs ${t.done?'line-through text-slate-400':'text-slate-700'}`}>{t.title}</span>
-                        {t.intensity==='demanding' && <Zap className="w-3 h-3 text-violet-400 shrink-0 mt-0.5" fill="currentColor"/>}
                       </div>
                       {isAtRisk && (
                         <div className="pl-5 mt-0.5">
@@ -986,19 +1127,38 @@ function DayColumn({ day, isToday, isNextWeekStart, onToggleDone, onDelete, onTo
                           </span>
                         </div>
                       )}
+                      {isExplaining && t.placementReason && (
+                        <div className="pl-5 mt-1 mb-1">
+                          <div className="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 leading-relaxed">
+                            {t.placementReason}
+                          </div>
+                        </div>
+                      )}
                       <div className="flex items-center gap-1.5 mt-1 pl-5">
                         {t.isPartial && (
-                          <div className="flex items-center gap-1">
-                            <span className="font-mono-plex text-xs text-slate-400 shrink-0">{t.chunkIndex}·{t.duration}m</span>
-                            {t.wasRepacked && <span className="text-xs text-teal-600 font-medium shrink-0" title="Remaining sessions consolidated">↫</span>}
-                          </div>
+                          <span className="font-mono-plex text-xs text-slate-400 shrink-0">{t.chunkIndex}·{t.duration}m</span>
                         )}
                         {t.dueDate && t.dueDate<day.date && <span className="text-xs text-amber-600 shrink-0">from {formatShortDate(t.dueDate)}</span>}
                         <span className="flex-1"></span>
-                        <button onClick={()=>onTogglePressing(t.id)} className="shrink-0">
+                        <button
+                          onClick={()=>onToggleExplain(explainKey)}
+                          aria-label={`Why is ${t.title} scheduled here?`}
+                          className={`shrink-0 w-3 h-3 rounded-full border text-[8px] leading-none font-bold flex items-center justify-center ${isExplaining?'bg-slate-700 border-slate-700 text-white':'border-slate-300 text-slate-400'}`}
+                          title="Why is this here?">?</button>
+                        {isPinnedHere && (
+                          <button onClick={()=>onUnpin(t.id)} aria-label={`Unpin ${t.title}`} className="shrink-0" title="Pinned here manually — click to unpin and let it reschedule automatically">
+                            <Pin className="w-3 h-3 text-indigo-500" fill="currentColor"/>
+                          </button>
+                        )}
+                        {!t.recurringId && (
+                          <button onClick={()=>onEdit(t.id)} aria-label={`Edit ${t.title}`} className="text-slate-300 shrink-0 hover:text-slate-500" title="Edit this task">
+                            <Pencil className="w-3 h-3"/>
+                          </button>
+                        )}
+                        <button onClick={()=>onTogglePressing(t.id)} aria-label={t.pressing?`Unmark ${t.title} as pressing`:`Mark ${t.title} as pressing`} className="shrink-0" title="Pressing — can use catch-up blocks">
                           <Star className={`w-3 h-3 ${t.pressing?'text-amber-500':'text-slate-300'}`} fill={t.pressing?'currentColor':'none'}/>
                         </button>
-                        <button onClick={()=>onDelete(t.id)} className="text-slate-300 shrink-0"><Trash2 className="w-3 h-3"/></button>
+                        <button onClick={()=>onDelete(t.id)} aria-label={`Delete ${t.title}`} className="text-slate-300 shrink-0 hover:text-rose-500" title="Delete this task"><Trash2 className="w-3 h-3"/></button>
                       </div>
                     </div>
                   );
@@ -1030,77 +1190,137 @@ function StatsBar({ stats }){
     </div>
   );
 }
-function EnergyCheckIn({ value, onSet }){
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-3">
-      <div className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Energy today</div>
-      <div className="flex gap-1.5">
-        {ENERGY_LEVELS.map(lvl=>(
-          <button key={lvl} onClick={()=>onSet(lvl)} className={`flex-1 text-xs py-2 rounded-lg border font-medium transition-colors ${value===lvl?'bg-violet-500 text-white border-violet-500':'border-slate-200 text-slate-500 hover:border-violet-300'}`}>
-            {ENERGY_SHORT[lvl]}
-          </button>
-        ))}
-      </div>
-    </div>
+function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, totalWeeklyMinutes=0, accuracy=null }){
+  const isEditing = !!existingTask;
+  const [title,setTitle] = useState(existingTask ? existingTask.title : '');
+  const [duration,setDuration] = useState(existingTask ? existingTask.duration : 15);
+  // "Other" is pre-opened when editing a task whose duration isn't one of the presets,
+  // so the current value is visible and editable instead of silently unrepresented.
+  const [customDuration,setCustomDuration] = useState(
+    existingTask ? !DURATION_PRESETS.some(p=>p.minutes===existingTask.duration) : false
   );
-}
-function AddTaskForm({ onAdd, onClose }){
-  const [title,setTitle] = useState('');
-  const [duration,setDuration] = useState(15);
-  const [dueDate,setDueDate] = useState('');
-  const [pressing,setPressing] = useState(false);
-  const [intensity,setIntensity] = useState('normal');
+  const [dueDate,setDueDate] = useState(existingTask && existingTask.dueDate ? existingTask.dueDate : '');
+  const [pressing,setPressing] = useState(existingTask ? !!existingTask.pressing : false);
+
+  const mins = Math.max(5, Number(duration)||15);
+  /*
+    ENTRY-TIME FIT WARNING — the scheduler will happily shred an oversized task into
+    slivers across many blocks, or overflow it entirely, without ever saying so at the
+    point where you could still change your mind. These two checks surface the problem
+    while you're still typing:
+      - bigger than your LARGEST single block  -> it can only ever exist as a split
+      - bigger than your whole WEEK's capacity -> it can't fit in a week at all
+    Both are warnings, never blocks: a genuinely large task split across blocks is a
+    perfectly reasonable thing to want.
+  */
+  const willSplit = largestSlotMinutes>0 && mins > largestSlotMinutes;
+  const exceedsWeek = totalWeeklyMinutes>0 && mins > totalWeeklyMinutes;
+
+  /*
+    REFERENCE-CLASS ESTIMATE CORRECTION.
+    ------------------------------------
+    People systematically underestimate how long their own tasks will take, and simply
+    having done the task before doesn't fix it — the reliable correction is to apply
+    your own historical ratio rather than trusting the fresh intuition.
+
+    The app has been quietly collecting exactly that: every completed task where you
+    logged actual time contributes to computeAccuracy(). Until now it was only shown
+    as a retrospective stat in Trends, at the moment it could no longer be acted on.
+    Here it's surfaced at the point of decision, with a one-tap button to accept it.
+
+    Deliberately advisory, never automatic: it suggests, shows its working ("based on
+    N tasks"), and leaves the number alone unless you press the button. Suppressed
+    below MIN_ACCURACY_SAMPLE completions, and when your ratio is close enough to 1
+    that a correction would be noise.
+  */
+  const hasUsableAccuracy = accuracy && accuracy.count >= MIN_ACCURACY_SAMPLE
+    && (accuracy.ratio > 1.1 || accuracy.ratio < 0.9);
+  const adjustedMins = hasUsableAccuracy ? Math.max(5, Math.round((mins*accuracy.ratio)/5)*5) : null;
+  const showAdjustment = hasUsableAccuracy && adjustedMins !== mins;
+  const runsOver = hasUsableAccuracy && accuracy.ratio > 1;
+
   function submit(){
     if (!title.trim()) return;
-    onAdd({ title: title.trim(), duration: Math.max(5, Number(duration)||15), dueDate: dueDate||null, pressing, intensity });
+    onSubmit({ title: title.trim(), duration: mins, dueDate: dueDate||null, pressing });
     onClose();
   }
   function handleTitleKeyDown(e){
     if (e.key === 'Enter'){ e.preventDefault(); submit(); }
+    if (e.key === 'Escape'){ e.preventDefault(); onClose(); }
   }
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-slate-900">Add a task</span>
-        <button type="button" onClick={onClose} className="text-slate-400"><X className="w-4 h-4"/></button>
+        <span className="text-sm font-semibold text-slate-900">{isEditing ? 'Edit task' : 'Add a task'}</span>
+        <button type="button" onClick={onClose} aria-label="Close form" className="text-slate-400"><X className="w-4 h-4"/></button>
       </div>
-      <input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={handleTitleKeyDown} placeholder="What needs doing?" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
-      <div className="flex gap-2">
-        <div className="flex-1">
-          <label className="text-xs text-slate-400">Minutes</label>
-          <input type="number" min="5" step="5" value={duration} onChange={e=>setDuration(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
-        </div>
-        <div className="flex-1">
-          <label className="text-xs text-slate-400">Due by (optional)</label>
-          <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
-        </div>
-      </div>
+      <input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={handleTitleKeyDown} placeholder="What needs doing?" aria-label="Task title" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
       <div>
-        <label className="text-xs text-slate-400 block mb-1">How demanding is this?</label>
-        <div className="flex gap-1.5">
-          {INTENSITY_LEVELS.map(lvl=>(
-            <button key={lvl} type="button" onClick={()=>setIntensity(lvl)} className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${intensity===lvl?'bg-violet-500 text-white border-violet-500':'border-slate-200 text-slate-500 hover:border-violet-300'}`}>
-              {INTENSITY_META[lvl].short}
+        <label className="text-xs text-slate-400 block mb-1">How long?</label>
+        <div className="flex flex-wrap gap-1.5">
+          {DURATION_PRESETS.map(p=>(
+            <button key={p.minutes} type="button" onClick={()=>{ setDuration(p.minutes); setCustomDuration(false); }}
+              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${!customDuration && duration===p.minutes ? 'bg-slate-900 text-white border-slate-900' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>
+              {p.label}
             </button>
           ))}
+          <button type="button" onClick={()=>setCustomDuration(true)}
+            className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${customDuration ? 'bg-slate-900 text-white border-slate-900' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>
+            Other
+          </button>
         </div>
+        {customDuration && (
+          <input type="number" min="5" step="5" value={duration} onChange={e=>setDuration(e.target.value)}
+            placeholder="minutes" aria-label="Custom duration in minutes"
+            className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
+        )}
+        {showAdjustment && (
+          <div className="mt-1.5 text-xs text-indigo-800 bg-indigo-50 border border-indigo-200 rounded-lg px-2 py-1.5">
+            <div>
+              Across your last {accuracy.count} timed tasks you've run{' '}
+              <span className="font-semibold">
+                {runsOver
+                  ? `${Math.round((accuracy.ratio-1)*100)}% over`
+                  : `${Math.round((1-accuracy.ratio)*100)}% under`}
+              </span>{' '}
+              your estimates — so this may really take about {formatDurationHM(adjustedMins)}.
+            </div>
+            <button type="button" onClick={()=>{ setDuration(adjustedMins); setCustomDuration(!DURATION_PRESETS.some(p=>p.minutes===adjustedMins)); }}
+              className="mt-1.5 text-xs bg-indigo-600 text-white rounded-lg px-2 py-1 font-medium">
+              Use {formatDurationHM(adjustedMins)} instead
+            </button>
+          </div>
+        )}
+        {exceedsWeek ? (
+          <div className="mt-1.5 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1.5">
+            {formatDurationHM(mins)} is more than your entire week of flex time ({formatDurationHM(totalWeeklyMinutes)}). This will spill across several weeks — consider breaking it into smaller tasks.
+          </div>
+        ) : willSplit ? (
+          <div className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+            Your largest block is {formatDurationHM(largestSlotMinutes)}, so this will be split across several sittings.
+          </div>
+        ) : null}
+      </div>
+      <div>
+        <label className="text-xs text-slate-400 block mb-1">Due by (optional)</label>
+        <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} aria-label="Due date" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
       </div>
       <label className="flex items-start gap-2 text-xs text-slate-600">
         <input type="checkbox" checked={pressing} onChange={e=>setPressing(e.target.checked)} className="mt-0.5"/>
         <span>Pressing / specially requested — eligible for catch-up-only blocks (Tue eve, Sat morning)</span>
       </label>
-      <button type="button" onClick={submit} className="w-full py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium">Add task</button>
+      <button type="button" onClick={submit} className="w-full py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium">{isEditing ? 'Save changes' : 'Add task'}</button>
     </div>
   );
 }
 function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setRecWeekly, onClearBacklog, backlogCount, slotsUnlocked }){
-  const [newSlot,setNewSlot] = useState({ day:1, start:'', end:'', restricted:false, reserved:false, energy:'normal' });
+  const [newSlot,setNewSlot] = useState({ day:1, start:'', end:'', restricted:false });
   const [newDaily,setNewDaily] = useState({ title:'', duration:10, preference:'', autoExpire:false });
   const [newWeekly,setNewWeekly] = useState({ title:'', duration:15, day:'' });
   function addSlot(){
     if (!newSlot.start || !newSlot.end) return;
-    setSlots(prev=>[...prev, { id:genId(), day:Number(newSlot.day), start:newSlot.start, end:newSlot.end, restricted:!!newSlot.restricted, reserved:newSlot.reserved?'large':null, energy:newSlot.energy }]);
-    setNewSlot({ day:1, start:'', end:'', restricted:false, reserved:false, energy:'normal' });
+    setSlots(prev=>[...prev, { id:genId(), day:Number(newSlot.day), start:newSlot.start, end:newSlot.end, restricted:!!newSlot.restricted }]);
+    setNewSlot({ day:1, start:'', end:'', restricted:false });
   }
   function addDaily(){
     if (!newDaily.title.trim()) return;
@@ -1121,8 +1341,8 @@ function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setR
         <div className="space-y-1.5">
           {sortedSlots.map(s=>(
             <div key={s.id} className="flex items-center justify-between text-sm bg-white border border-slate-200 rounded-xl px-3 py-2">
-              <span className="text-slate-700">{DAY_SHORT[s.day]} {minToLabel(timeToMin(s.start))}–{minToLabel(timeToMin(s.end))}{s.restricted && <span className="text-rose-500"> · catch-up only{slotsUnlocked && ' (unlocked)'}</span>}{s.reserved==='large' && <span className="text-indigo-500"> · big tasks only</span>}{s.energy==='high' && <span className="text-violet-500"> · high energy</span>}{s.energy==='low' && <span className="text-teal-600"> · low energy</span>}</span>
-              <button onClick={()=>setSlots(prev=>prev.filter(x=>x.id!==s.id))} className="text-slate-300"><Trash2 className="w-3.5 h-3.5"/></button>
+              <span className="text-slate-700">{DAY_SHORT[s.day]} {minToLabel(timeToMin(s.start))}–{minToLabel(timeToMin(s.end))}{s.restricted && <span className="text-rose-500"> · catch-up only{slotsUnlocked && ' (unlocked)'}</span>}</span>
+              <button onClick={()=>setSlots(prev=>prev.filter(x=>x.id!==s.id))} aria-label="Delete this flex block" className="text-slate-300"><Trash2 className="w-3.5 h-3.5"/></button>
             </div>
           ))}
         </div>
@@ -1132,14 +1352,8 @@ function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setR
           </select>
           <input type="time" value={newSlot.start} onChange={e=>setNewSlot(s=>({...s,start:e.target.value}))} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5"/>
           <input type="time" value={newSlot.end} onChange={e=>setNewSlot(s=>({...s,end:e.target.value}))} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5"/>
-          <select value={newSlot.energy} onChange={e=>setNewSlot(s=>({...s,energy:e.target.value}))} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5">
-            {ENERGY_LEVELS.map(lvl=><option key={lvl} value={lvl}>{ENERGY_SHORT[lvl]} energy</option>)}
-          </select>
           <label className="flex items-center gap-1 text-xs text-slate-500">
             <input type="checkbox" checked={newSlot.restricted} onChange={e=>setNewSlot(s=>({...s,restricted:e.target.checked}))}/> catch-up only
-          </label>
-          <label className="flex items-center gap-1 text-xs text-slate-500">
-            <input type="checkbox" checked={newSlot.reserved} onChange={e=>setNewSlot(s=>({...s,reserved:e.target.checked}))}/> big tasks only
           </label>
           <button onClick={addSlot} className="text-xs bg-slate-900 text-white rounded-lg px-2.5 py-1.5 ml-auto">Add</button>
         </div>
@@ -1158,7 +1372,7 @@ function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setR
               <button onClick={()=>setRecDaily(prev=>prev.map(x=>x.id===r.id?{...x,autoExpire:!x.autoExpire}:x))} className={`text-[10px] px-1.5 py-1 rounded-lg border shrink-0 ${r.autoExpire?'border-amber-300 text-amber-700 bg-amber-50':'border-slate-200 text-slate-400'}`}>
                 {r.autoExpire ? 'Auto-expires' : 'Carries over'}
               </button>
-              <button onClick={()=>setRecDaily(prev=>prev.filter(x=>x.id!==r.id))} className="text-slate-300 shrink-0"><Trash2 className="w-3.5 h-3.5"/></button>
+              <button onClick={()=>setRecDaily(prev=>prev.filter(x=>x.id!==r.id))} aria-label={`Delete recurring task ${r.title}`} className="text-slate-300 shrink-0"><Trash2 className="w-3.5 h-3.5"/></button>
             </div>
           ))}
         </div>
@@ -1182,7 +1396,7 @@ function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setR
           {recWeekly.map(r=>(
             <div key={r.id} className="flex items-center justify-between text-sm bg-white border border-slate-200 rounded-xl px-3 py-2">
               <span className="text-slate-700">{r.title} · {r.duration}min{r.day!=null && ` · ${DAY_SHORT[r.day]}`}</span>
-              <button onClick={()=>setRecWeekly(prev=>prev.filter(x=>x.id!==r.id))} className="text-slate-300"><Trash2 className="w-3.5 h-3.5"/></button>
+              <button onClick={()=>setRecWeekly(prev=>prev.filter(x=>x.id!==r.id))} aria-label={`Delete recurring task ${r.title}`} className="text-slate-300"><Trash2 className="w-3.5 h-3.5"/></button>
             </div>
           ))}
         </div>
@@ -1210,6 +1424,73 @@ function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setR
    completed volume (priority 3). All hand-rolled with plain divs/inline styles to
    match the app's existing visual language rather than pulling in a chart library.
    ============================================================ */
+/* ============================================================
+   Completed work — a real record of what actually got done, not just a count.
+   Reads the same live+archived union the stats bar uses, so nothing disappears
+   from view when old completions are compacted into the archive.
+   ============================================================ */
+function CompletedPanel({ records }){
+  const [range,setRange] = useState('month'); // week | month | all
+  const now = new Date();
+  const filtered = useMemo(()=>{
+    const weekStart = toDateStr(startOfWeek(now));
+    const monthPrefix = toDateStr(now).slice(0,7);
+    return records
+      .filter(r=>{
+        if (!r.doneAt) return false;
+        const dStr = toDateStr(new Date(r.doneAt));
+        if (range==='week') return dStr >= weekStart;
+        if (range==='month') return dStr.slice(0,7) === monthPrefix;
+        return true;
+      })
+      .sort((a,b)=>b.doneAt-a.doneAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[records, range]);
+
+  const totalEstimated = filtered.reduce((s,r)=>s+(r.duration||0),0);
+  const labels = { week:'This week', month:'This month', all:'All time' };
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-3">
+        <h3 className="text-xs font-semibold text-slate-900 uppercase tracking-widest">Completed work</h3>
+        <div className="flex gap-1">
+          {['week','month','all'].map(r=>(
+            <button key={r} onClick={()=>setRange(r)}
+              className={`text-xs px-2 py-1 rounded-lg border transition-colors ${range===r?'bg-slate-900 text-white border-slate-900':'border-slate-200 text-slate-500 hover:border-slate-400'}`}>
+              {labels[r]}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-slate-400">
+          {filtered.length} task{filtered.length===1?'':'s'} · {formatDurationHM(totalEstimated)} estimated
+        </span>
+      </div>
+      {filtered.length===0 ? (
+        <div className="text-xs text-slate-400">Nothing completed in this period yet.</div>
+      ) : (
+        <div className="space-y-1">
+          {filtered.map(r=>{
+            const est = r.duration;
+            const act = r.actualMinutes;
+            const over = act!=null && est>0 ? act/est : null;
+            return (
+              <div key={r.id+'|'+r.doneAt} className="flex items-baseline gap-2 text-xs border-b border-slate-100 pb-1">
+                <span className="font-mono-plex text-slate-400 shrink-0 w-14">{formatShortDate(toDateStr(new Date(r.doneAt)))}</span>
+                <span className={`flex-1 min-w-0 truncate ${r.recurringId?'text-emerald-700':'text-slate-700'}`}>{r.title}</span>
+                <span className="font-mono-plex text-slate-400 shrink-0">{formatDurationHM(est)}</span>
+                {act!=null && (
+                  <span className={`font-mono-plex shrink-0 ${over>1.15?'text-amber-600':over<0.85?'text-indigo-600':'text-emerald-600'}`}>
+                    actual {formatDurationHM(act)}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 function TrendsPanel({ weeklySnapshots, weeklyVolume, accuracy }){
   const weekKeys = Object.keys(weeklySnapshots).sort().slice(-10);
   const dotColor = { green:'bg-emerald-500', orange:'bg-orange-500', red:'bg-rose-500' };
@@ -1280,12 +1561,41 @@ export default function WeekPlanner(){
   const [openDrawer,setOpenDrawer] = useState(null); // null | 'settings' | 'trends' — accordion, so only one eats bottom-bar height at a time
   const [toast,setToast] = useState(null);
   const [timeInput,setTimeInput] = useState('');
-  const [dailyEnergy,setDailyEnergy] = useState({}); // { 'YYYY-MM-DD': 'high'|'normal'|'low' } — resets naturally each day since it's keyed by date
+  const [draggingTaskId,setDraggingTaskId] = useState(null); // id of the task currently being dragged, or null
+  const [dragOverKey,setDragOverKey] = useState(null); // instance key of the slot currently hovered during a drag
+  const [explainingKey,setExplainingKey] = useState(null); // which placed session is showing its "why is this here?" explanation
   const [weeklySnapshots,setWeeklySnapshots] = useState({}); // { 'YYYY-MM-DD' (week start): { level, overflowMinutes } } — history for the term trend view
-  const [energySchemeV2,setEnergySchemeV2] = useState(true); // one-time flag: has the Thu/Fri-only high-energy redefinition been applied yet. Defaults true since a fresh install already starts on the new scheme via DEFAULT_SLOTS — existing saved data is checked against its OWN loaded value below, not this default, so it still resyncs correctly the first time it's missing.
+  const [archive,setArchive] = useState([]); // compacted completion records for tasks older than ARCHIVE_AFTER_DAYS
+  const [editingTaskId,setEditingTaskId] = useState(null); // task currently open in the edit form, or null
+  const [pendingUndo,setPendingUndo] = useState(null); // { task, timeoutId } — a just-deleted task that can still be restored
   useEffect(()=>{
     const t = setInterval(()=>setNow(new Date()), 30000);
     return ()=>clearInterval(t);
+  },[]);
+  /*
+    Global keyboard shortcuts. Deliberately ignored while focus is in any text field
+    or the form is already open, so typing "n" in a task title never opens a new form.
+      n / N  -> open the add-task form
+      Escape -> close whichever form is open
+  */
+  useEffect(()=>{
+    function onKeyDown(e){
+      const el = e.target;
+      const typing = el && (el.tagName==='INPUT' || el.tagName==='TEXTAREA' || el.tagName==='SELECT' || el.isContentEditable);
+      if (e.key==='Escape'){
+        setShowAdd(false);
+        setEditingTaskId(null);
+        return;
+      }
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key==='n' || e.key==='N'){
+        e.preventDefault();
+        setEditingTaskId(null);
+        setShowAdd(true);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return ()=>window.removeEventListener('keydown', onKeyDown);
   },[]);
   useEffect(()=>{
     if (!toast || toast.askTime) return; // stay open while waiting for an explicit Save/Skip on the time prompt
@@ -1299,33 +1609,25 @@ export default function WeekPlanner(){
         if (rawValue){
           const data = JSON.parse(rawValue);
           if (data.tasks){
-            // migration: tasks saved before intensity/actualMinutes existed default to
-            // 'normal' intensity and no logged time — harmless, everyone starts neutral.
-            const migratedTasks = data.tasks.map(t=> t.intensity!==undefined ? t : { ...t, intensity:'normal', actualMinutes: t.actualMinutes!==undefined?t.actualMinutes:null });
+            // migration: the energy/intensity system has been removed entirely — strip
+            // any leftover `intensity` field from tasks saved before this change so old
+            // data doesn't carry dead keys forward indefinitely. Also default the newer
+            // `pinnedTo` field (manual drag-and-drop placement) to null for older tasks.
+            const migratedTasks = data.tasks.map(t=>{
+              const { intensity, ...rest } = t;
+              return { ...rest, pinnedTo: rest.pinnedTo !== undefined ? rest.pinnedTo : null };
+            });
             setTasks(migratedTasks);
           }
           if (data.slots){
-            // migration: slots saved before energy existed backfill from the matching
-            // built-in default by id (same pattern as the autoExpire migration below),
-            // else 'normal' for a slot the person added themselves.
-            let migratedSlots = data.slots.map(s=>{
-              if (s.energy !== undefined) return s;
-              const def = DEFAULT_SLOTS.find(d=>d.id===s.id);
-              return { ...s, energy: def ? def.energy : 'normal' };
+            // migration: strip any leftover `energy` field (energy system removed) and
+            // `reserved` field (the "big tasks only" reserved-slot restriction has also
+            // been removed — those blocks are now plain open slots) from slots saved
+            // before these changes.
+            const migratedSlots = data.slots.map(s=>{
+              const { energy, reserved, ...rest } = s;
+              return rest;
             });
-            // ONE-TIME redefinition: only the Thu/Fri focus blocks count as high-energy
-            // now, everything after 2:30pm stays low, everything else is normal. This
-            // force-applies the new scheme once to slots that still carry their original
-            // template id; a slot the person deleted and re-added under a fresh id is
-            // untouched (no default to match against). Runs only if it hasn't already,
-            // so any manual energy edits made in Settings afterward are never overwritten.
-            if (!data.energySchemeV2){
-              migratedSlots = migratedSlots.map(s=>{
-                const def = DEFAULT_SLOTS.find(d=>d.id===s.id);
-                return def ? { ...s, energy: def.energy } : s;
-              });
-            }
-            setEnergySchemeV2(true);
             setSlots(migratedSlots);
           }
           if (data.recDaily){
@@ -1355,8 +1657,8 @@ export default function WeekPlanner(){
             setRecWeekly(migratedRecWeekly);
           }
           if (data.lastGenWeek) setLastGenWeek(data.lastGenWeek);
-          if (data.dailyEnergy) setDailyEnergy(data.dailyEnergy);
           if (data.weeklySnapshots) setWeeklySnapshots(data.weeklySnapshots);
+          if (data.archive) setArchive(data.archive);
         }
       } catch(e){ /* first ever run — keep defaults */ }
       setLoaded(true);
@@ -1364,13 +1666,17 @@ export default function WeekPlanner(){
   },[]);
   useEffect(()=>{
     if (!loaded) return;
-    const currentWeekMonday = toDateStr(startOfWeek(now));
-    if (currentWeekMonday === lastGenWeek) return;
+    // NOTE: deliberately NOT short-circuiting when this week has already been
+    // generated. A recurring definition added mid-week must produce its instances
+    // immediately rather than waiting for next Monday, so this runs whenever the
+    // definitions change too. generateRecurringInstances dedupes internally, so
+    // re-running is harmless — and setTasks is only called when it actually
+    // produced something new.
     const { newTasks, newLastGenWeek } = generateRecurringInstances(tasks, recDaily, recWeekly, now, lastGenWeek);
     if (newTasks.length) setTasks(prev=>[...prev, ...newTasks]);
-    setLastGenWeek(newLastGenWeek);
+    if (newLastGenWeek !== lastGenWeek) setLastGenWeek(newLastGenWeek);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[loaded, now, lastGenWeek]);
+  },[loaded, now, lastGenWeek, recDaily, recWeekly]);
   useEffect(()=>{
     if (!loaded) return;
     const todayStrNow = toDateStr(now);
@@ -1378,17 +1684,31 @@ export default function WeekPlanner(){
   },[loaded, now, recDaily]);
   useEffect(()=>{
     if (!loaded) return;
+    const todayStrNow = toDateStr(now);
+    setTasks(prev=>clearStalePins(prev, slots, todayStrNow));
+  },[loaded, now, slots]);
+  // Compact long-completed tasks out of the live list. Runs on the same 30s tick as
+  // the other maintenance effects; archiveOldCompleted returns null when there's
+  // nothing to move, so this is a no-op almost every time it fires.
+  useEffect(()=>{
+    if (!loaded) return;
+    const result = archiveOldCompleted(tasks, archive, Date.now());
+    if (!result) return;
+    setTasks(result.tasks);
+    setArchive(result.archive);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[loaded, now]);
+  useEffect(()=>{
+    if (!loaded) return;
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks, slots, recDaily, recWeekly, lastGenWeek, dailyEnergy, weeklySnapshots, energySchemeV2 }));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks, slots, recDaily, recWeekly, lastGenWeek, weeklySnapshots, archive }));
     } catch(e){ /* storage unavailable or full — silently skip, same as before */ }
-  },[tasks, slots, recDaily, recWeekly, lastGenWeek, dailyEnergy, weeklySnapshots, energySchemeV2, loaded]);
-  // Repacking: collapse any split tasks whose pending sessions fit in a single slot
-  const repachedTasks = useMemo(()=>attemptRepacking(tasks, slots), [tasks, slots]);
+  },[tasks, slots, recDaily, recWeekly, lastGenWeek, weeklySnapshots, archive, loaded]);
   // Baseline schedule: catch-up slots ALWAYS gated here, regardless of workload level —
   // this is what the traffic light itself is diagnosed from, so the diagnosis never
   // depends on whether the unlock is currently active (see computeWorkload for why).
-  const baselineSchedule = useMemo(()=>buildSchedule(repachedTasks, slots, now), [repachedTasks, slots, now]);
-  const workload = useMemo(()=>computeWorkload(repachedTasks, baselineSchedule, slots, recDaily, recWeekly, now), [repachedTasks, baselineSchedule, slots, recDaily, recWeekly, now]);
+  const baselineSchedule = useMemo(()=>buildSchedule(tasks, slots, now), [tasks, slots, now]);
+  const workload = useMemo(()=>computeWorkload(tasks, baselineSchedule, slots, recDaily, recWeekly, now), [tasks, baselineSchedule, slots, recDaily, recWeekly, now]);
   // Term-trend history: write the CURRENT week's workload snapshot under its own
   // week-start key every time it changes. Past weeks' keys are never touched again once
   // the calendar moves on, so they're naturally frozen as history — no separate
@@ -1399,25 +1719,32 @@ export default function WeekPlanner(){
     setWeeklySnapshots(prev=>{
       const existing = prev[wk];
       if (existing && existing.level===workload.level && existing.overflowMinutes===workload.overflowMinutes) return prev;
-      return { ...prev, [wk]: { level: workload.level, overflowMinutes: workload.overflowMinutes } };
+      const merged = { ...prev, [wk]: { level: workload.level, overflowMinutes: workload.overflowMinutes } };
+      // Cap history at roughly a year. Without this the map grows by one key every
+      // week forever and rides along in every localStorage write; the trends view
+      // only ever reads the last 10 weeks anyway.
+      const keys = Object.keys(merged).sort();
+      if (keys.length <= SNAPSHOT_HISTORY_WEEKS) return merged;
+      const trimmed = {};
+      for (const k of keys.slice(-SNAPSHOT_HISTORY_WEEKS)) trimmed[k] = merged[k];
+      return trimmed;
     });
   },[loaded, now, workload.level, workload.overflowMinutes]);
   // Due-date risk: a SEPARATE trigger for the same unlock, computed from the same
   // baseline for the same anti-oscillation reason — see computeDueDateRisk.
-  const dueDateRisk = useMemo(()=>computeDueDateRisk(repachedTasks, baselineSchedule, toDateStr(now)), [repachedTasks, baselineSchedule, now]);
+  const dueDateRisk = useMemo(()=>computeDueDateRisk(tasks, baselineSchedule, toDateStr(now)), [tasks, baselineSchedule, now]);
   // Slots unlock if EITHER the week is overloaded overall OR a specific task's own
   // deadline is projected to be missed — two different questions, one shared remedy.
   const slotsUnlocked = workload.level==='red' || dueDateRisk.count>0;
   // The schedule actually shown/used: identical to baseline unless something unlocked
   // catch-up slots, in which case everything gets recomputed once more with them open.
   const schedule = useMemo(()=>{
-    if (slotsUnlocked) return buildSchedule(repachedTasks, slots, now, 3, true);
+    if (slotsUnlocked) return buildSchedule(tasks, slots, now, SCHEDULE_WEEKS, true);
     return baselineSchedule;
-  }, [slotsUnlocked, repachedTasks, slots, now, baselineSchedule]);
+  }, [slotsUnlocked, tasks, slots, now, baselineSchedule]);
   // Persist the current render's session shape back onto each task so the UI reflects
   // it (e.g. "part 2 of 3" labels, completion checkboxes) — and so a completed session
   // stays marked done even though everything else is recarved fresh every render.
-  // Also sync wasRepacked flag from repachedTasks into the persisted task.
   //
   // IMPORTANT: this must do a real content comparison, not just compare array LENGTH.
   // Under the fluid remaining-work model, a task's session count can legitimately stay
@@ -1443,43 +1770,65 @@ export default function WeekPlanner(){
         const newSessions = schedule.sessionUpdates.get(t.id);
         if (sessionsEqual(t.sessions, newSessions)) return t;
         changed = true;
-        // Find the repacked version to get wasRepacked flag
-        const repachedVersion = repachedTasks.find(rt=>rt.id===t.id);
-        const wasRepackedNow = repachedVersion?.wasRepacked || false;
-        return { ...t, sessions: newSessions, wasRepacked: wasRepackedNow };
+        return { ...t, sessions: newSessions };
       });
       return changed ? next : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[schedule.sessionUpdates, loaded, repachedTasks]);
-  const stats = useMemo(()=>computeStats(tasks, now), [tasks, now]);
+  },[schedule.sessionUpdates, loaded]);
+  // Live-completed tasks plus archived records — every completion-facing number reads
+  // this union, so archiving old work never changes what's displayed.
+  const records = useMemo(()=>completionRecords(tasks, archive), [tasks, archive]);
+  const stats = useMemo(()=>computeStats(records, now), [records, now]);
   const todayStr = toDateStr(now);
   const nowMin = now.getHours()*60+now.getMinutes();
   const currentIdx = schedule.instances.findIndex(i=>i.date===todayStr && nowMin>=i.startMin && nowMin<i.endMin);
   const currentInst = currentIdx>=0 ? schedule.instances[currentIdx] : null;
   const nextInst = currentInst ? schedule.instances[currentIdx+1] : schedule.instances[0];
   const nextWeekStart = toDateStr(addDays(startOfWeek(now),7));
-  const nextWeekEnd = toDateStr(addDays(startOfWeek(now),13));
+  const weekThreeStart = toDateStr(addDays(startOfWeek(now),14));
+  // Render the FULL scheduling horizon. buildSchedule looks 3 weeks ahead, so showing
+  // only 2 meant anything landing in week 3 was invisible — it existed, held capacity,
+  // and could miss a due date, but you couldn't see it, drag it, or ask why it was
+  // there. The rendered range and SCHEDULE_WEEKS are now driven by the same constant.
+  const horizonEnd = toDateStr(addDays(startOfWeek(now), SCHEDULE_WEEKS*7 - 1));
   const weekDates = [];
-  for (let i=0;i<14;i++){ const s = toDateStr(addDays(startOfWeek(now),i)); if (s>=todayStr && s<=nextWeekEnd) weekDates.push(s); }
+  for (let i=0;i<SCHEDULE_WEEKS*7;i++){ const s = toDateStr(addDays(startOfWeek(now),i)); if (s>=todayStr && s<=horizonEnd) weekDates.push(s); }
   const groupedDays = weekDates.map(dstr=>({
     date: dstr,
     dayOfWeek: parseDateStr(dstr).getDay(),
     slots: schedule.instances.filter(i=>i.date===dstr).sort((a,b)=>a.startMin-b.startMin)
   }));
-  const laterCount = schedule.instances.filter(i=>i.date>nextWeekEnd).reduce((sum,i)=>sum+i.assigned.length,0);
+  const laterCount = schedule.instances.filter(i=>i.date>horizonEnd).reduce((sum,i)=>sum+i.assigned.length,0);
   const backlogCount = tasks.filter(t=>!t.done && t.recurringId && t.dueDate < todayStr).length;
-  const accuracy = useMemo(()=>computeAccuracy(tasks), [tasks]);
-  const weeklyVolume = useMemo(()=>computeWeeklyVolume(tasks, Object.keys(weeklySnapshots).sort().slice(-10)), [tasks, weeklySnapshots]);
-  const todaysEnergy = dailyEnergy[todayStr] || null;
-  // Warn-only, as decided — never auto-moves anything, just flags it so you can swap a
-  // task out yourself if you want to.
-  const demandingTodayCount = todaysEnergy==='low'
-    ? schedule.instances.filter(i=>i.date===todayStr).reduce((sum,i)=>sum+i.assigned.filter(t=>t.intensity==='demanding').length,0)
-    : 0;
-  function setTodayEnergy(level){
-    setDailyEnergy(prev=>({ ...prev, [todayStr]: level }));
-  }
+  const pinnedCount = tasks.filter(t=>!t.done && t.pinnedTo).length;
+  // Overflow is emitted as individual unplaced PIECES; a single task can contribute
+  // several. Group them back per task so the banner can name what's actually stuck and
+  // how much of it, rather than reporting a piece count nobody can act on.
+  const overflowByTask = useMemo(()=>{
+    const byId = new Map();
+    for (const piece of schedule.overflow){
+      const existing = byId.get(piece.id);
+      if (existing) existing.unplacedMinutes += piece.duration;
+      else byId.set(piece.id, { id: piece.id, title: piece.title, duration: piece.duration, dueDate: piece.dueDate, unplacedMinutes: piece.duration });
+    }
+    return [...byId.values()].sort((a,b)=>b.unplacedMinutes-a.unplacedMinutes);
+  }, [schedule.overflow]);
+  const accuracy = useMemo(()=>computeAccuracy(records), [records]);
+  const weeklyVolume = useMemo(()=>computeWeeklyVolume(records, Object.keys(weeklySnapshots).sort().slice(-10)), [records, weeklySnapshots]);
+  // Slot capacity facts used by the task form's entry-time fit warnings.
+  const largestSlotMinutes = useMemo(()=>slots.reduce((max,s)=>Math.max(max, timeToMin(s.end)-timeToMin(s.start)), 0), [slots]);
+  const totalWeeklyMinutes = useMemo(()=>slots.reduce((sum,s)=>sum + (timeToMin(s.end)-timeToMin(s.start)), 0), [slots]);
+  const editingTask = editingTaskId ? tasks.find(t=>t.id===editingTaskId) || null : null;
+  /*
+    "Everything has a home" — unfinished tasks intrude on your attention, but making a
+    concrete plan for them discharges most of that intrusion; you don't have to finish
+    them, only genuinely schedule them. The scheduler has always been doing exactly
+    that work, silently. This states it, so the reassurance actually lands instead of
+    only the warnings being visible.
+  */
+  const pendingCount = tasks.filter(t=>!t.done).length;
+  const allPlaced = pendingCount>0 && overflowByTask.length===0 && dueDateRisk.count===0;
   function showCompletionToast(taskId, sessionId){
     const message = CELEBRATION_MESSAGES[Math.floor(Math.random()*CELEBRATION_MESSAGES.length)];
     setTimeInput('');
@@ -1535,11 +1884,66 @@ export default function WeekPlanner(){
   function togglePressing(taskId){
     setTasks(prev=>prev.map(t=>t.id===taskId?{...t, pressing:!t.pressing}:t));
   }
-  function deleteTask(taskId){
-    setTasks(prev=>prev.filter(t=>t.id!==taskId));
+  // ---- Drag and drop: manual placement overrides ----
+  // Dropping a task on a slot writes a `pinnedTo` marker onto the TASK (not the
+  // session), because sessions are recarved fresh on every render and their ids are
+  // not stable across recomputes — pinning a session id would break on the very next
+  // render. Pinning the task itself is stable, and the scheduler's PASS 0 honours it.
+  function handleDragStartTask(taskId){
+    setDraggingTaskId(taskId);
   }
-  function addTask({ title, duration, dueDate, pressing, intensity }){
-    setTasks(prev=>[...prev, makeTask({ title, duration, dueDate, pressing, intensity, source:'adhoc', order: Date.now() })]);
+  function handleDragEndTask(){
+    setDraggingTaskId(null);
+    setDragOverKey(null);
+  }
+  function handleDropOnSlot(slotId, date){
+    if (!draggingTaskId) return;
+    setTasks(prev=>prev.map(t=> t.id===draggingTaskId ? { ...t, pinnedTo: { slotId, date } } : t));
+    setDraggingTaskId(null);
+    setDragOverKey(null);
+  }
+  function unpinTask(taskId){
+    setTasks(prev=>prev.map(t=>t.id===taskId?{...t, pinnedTo:null}:t));
+  }
+  function clearAllPins(){
+    setTasks(prev=>prev.map(t=> t.pinnedTo ? {...t, pinnedTo:null} : t));
+  }
+  function toggleExplain(key){
+    setExplainingKey(cur=> cur===key ? null : key);
+  }
+  /*
+    DELETE WITH UNDO — deletion used to be instant and irreversible, on a 12px icon.
+    Rather than a confirm dialog on every delete (which gets tiresome fast for a
+    routine action), the task is removed immediately but stashed for UNDO_WINDOW_MS,
+    with a toast offering to restore it. Fast when you meant it, recoverable when you
+    didn't. A second delete during the window commits the first one.
+  */
+  function deleteTask(taskId){
+    const victim = tasks.find(t=>t.id===taskId);
+    if (!victim) return;
+    if (pendingUndo && pendingUndo.timeoutId) clearTimeout(pendingUndo.timeoutId);
+    setTasks(prev=>prev.filter(t=>t.id!==taskId));
+    if (editingTaskId===taskId) setEditingTaskId(null);
+    const timeoutId = setTimeout(()=>setPendingUndo(null), UNDO_WINDOW_MS);
+    setPendingUndo({ task: victim, timeoutId });
+  }
+  function undoDelete(){
+    if (!pendingUndo) return;
+    if (pendingUndo.timeoutId) clearTimeout(pendingUndo.timeoutId);
+    setTasks(prev=>[...prev, pendingUndo.task]);
+    setPendingUndo(null);
+  }
+  function addTask({ title, duration, dueDate, pressing }){
+    setTasks(prev=>[...prev, makeTask({ title, duration, dueDate, pressing, source:'adhoc', order: Date.now() })]);
+  }
+  function saveTaskEdit({ title, duration, dueDate, pressing }){
+    if (!editingTaskId) return;
+    setTasks(prev=>prev.map(t=> t.id===editingTaskId ? { ...t, title, duration, dueDate, pressing } : t));
+    setEditingTaskId(null);
+  }
+  function startEditing(taskId){
+    setShowAdd(false);
+    setEditingTaskId(taskId);
   }
   function clearBacklog(){
     setTasks(prev=>prev.map(t=> (!t.done && t.recurringId && t.dueDate<todayStr) ? {...t, done:true, doneAt:Date.now()} : t));
@@ -1579,25 +1983,60 @@ export default function WeekPlanner(){
       <div className="planner-shell flex-1 p-5 overflow-hidden">
         <div className="flex flex-col gap-4 overflow-y-auto min-h-0 pr-1">
           <HeroCard currentInst={currentInst} nextInst={nextInst} onToggleDone={toggleDone} slotsUnlocked={slotsUnlocked} atRiskIds={dueDateRisk.atRiskIds}/>
-          <EnergyCheckIn value={todaysEnergy} onSet={setTodayEnergy}/>
           <div>
-            {!showAdd ? (
+            {editingTask ? (
+              <TaskForm
+                key={editingTask.id}
+                existingTask={editingTask}
+                onSubmit={saveTaskEdit}
+                onClose={()=>setEditingTaskId(null)}
+                largestSlotMinutes={largestSlotMinutes}
+                totalWeeklyMinutes={totalWeeklyMinutes}
+                accuracy={accuracy}
+              />
+            ) : !showAdd ? (
               <button onClick={()=>setShowAdd(true)} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-slate-900 text-white font-semibold text-sm hover:bg-slate-800 transition-colors">
                 <Plus className="w-5 h-5"/> New task
+                <kbd className="ml-1 text-xs font-mono-plex bg-slate-700 rounded px-1.5 py-0.5 font-normal">n</kbd>
               </button>
             ) : (
-              <AddTaskForm onAdd={addTask} onClose={()=>setShowAdd(false)}/>
+              <TaskForm
+                onSubmit={addTask}
+                onClose={()=>setShowAdd(false)}
+                largestSlotMinutes={largestSlotMinutes}
+                totalWeeklyMinutes={totalWeeklyMinutes}
+                accuracy={accuracy}
+              />
             )}
           </div>
         </div>
         <div className="flex flex-col overflow-hidden min-h-0">
           <div className="flex items-center justify-between mb-3 shrink-0">
             <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-widest">Upcoming</h2>
-            {laterCount>0 && <span className="text-xs text-slate-400">+{laterCount} scheduled beyond next week</span>}
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1.5 text-xs text-slate-400">
+                <span className="w-2.5 h-2.5 rounded bg-emerald-100 border border-emerald-300 shrink-0"></span>
+                recurring
+              </span>
+              {laterCount>0 && <span className="text-xs text-slate-400">+{laterCount} scheduled beyond next week</span>}
+            </div>
           </div>
-          {schedule.overflow.length>0 && (
+          {overflowByTask.length>0 && (
             <div className="mb-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 shrink-0">
-              {schedule.overflow.length} task{schedule.overflow.length>1?'s':''} still don't fully fit in the next 3 weeks (even after splitting) — worth trimming your list.
+              <div className="font-semibold mb-1">
+                {overflowByTask.length} task{overflowByTask.length>1?'s don\u2019t':' doesn\u2019t'} fully fit in the next 3 weeks, even after splitting:
+              </div>
+              <ul className="space-y-0.5">
+                {overflowByTask.map(o=>(
+                  <li key={o.id} className="flex items-baseline gap-1.5">
+                    <span className="truncate">{o.title}</span>
+                    <span className="font-mono-plex text-amber-700 shrink-0">
+                      {formatDurationHM(o.unplacedMinutes)} unplaced{o.unplacedMinutes<o.duration ? ` of ${formatDurationHM(o.duration)}` : ''}
+                    </span>
+                    {o.dueDate && <span className="text-amber-600 shrink-0">· due {formatShortDate(o.dueDate)}</span>}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           {dueDateRisk.count>0 && (
@@ -1605,16 +2044,25 @@ export default function WeekPlanner(){
               {dueDateRisk.count} task{dueDateRisk.count>1?'s are':' is'} projected to miss {dueDateRisk.count>1?'their':'its'} due date at the current pace — catch-up sessions are open to try to get {dueDateRisk.count>1?'them':'it'} there in time.
             </div>
           )}
-          {demandingTodayCount>0 && (
-            <div className="mb-3 text-xs text-violet-800 bg-violet-50 border border-violet-200 rounded-xl px-3 py-2 shrink-0 flex items-center gap-1.5">
-              <Zap className="w-3.5 h-3.5 shrink-0" fill="currentColor"/>
-              You've marked today low-energy, but {demandingTodayCount} demanding task{demandingTodayCount>1?'s are':' is'} still scheduled today — worth swapping one out if you can.
+          {pinnedCount>0 && (
+            <div className="mb-3 text-xs text-indigo-800 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2 shrink-0 flex items-center gap-2">
+              <Pin className="w-3.5 h-3.5 shrink-0" fill="currentColor"/>
+              <span className="flex-1">{pinnedCount} task{pinnedCount>1?'s are':' is'} manually pinned and won't be moved by the scheduler.</span>
+              <button onClick={clearAllPins} className="shrink-0 underline font-medium">Clear all pins</button>
+            </div>
+          )}
+          {allPlaced && (
+            <div className="mb-3 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 shrink-0 flex items-center gap-2">
+              <Check className="w-3.5 h-3.5 shrink-0"/>
+              <span>
+                All {pendingCount} outstanding task{pendingCount===1?' has':'s have'} a slot — nothing is unplaced, and nothing is projected to miss its due date.
+              </span>
             </div>
           )}
           <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0">
             <div className="grid gap-3 h-full" style={{ gridTemplateColumns: `repeat(${Math.max(groupedDays.length,1)}, minmax(260px, 1fr))` }}>
               {groupedDays.map(day=>(
-                <DayColumn key={day.date} day={day} isToday={day.date===todayStr} isNextWeekStart={day.date===nextWeekStart} onToggleDone={toggleDone} onDelete={deleteTask} onTogglePressing={togglePressing} slotsUnlocked={slotsUnlocked} atRiskIds={dueDateRisk.atRiskIds}/>
+                <DayColumn key={day.date} day={day} isToday={day.date===todayStr} weekLabel={day.date===nextWeekStart ? 'Next week' : day.date===weekThreeStart ? 'Week after' : null} onToggleDone={toggleDone} onDelete={deleteTask} onEdit={startEditing} onTogglePressing={togglePressing} onUnpin={unpinTask} slotsUnlocked={slotsUnlocked} atRiskIds={dueDateRisk.atRiskIds} draggingTaskId={draggingTaskId} onDragStartTask={handleDragStartTask} onDragEndTask={handleDragEndTask} dragOverKey={dragOverKey} onDragOverSlot={setDragOverKey} onDropOnSlot={handleDropOnSlot} explainingKey={explainingKey} onToggleExplain={toggleExplain}/>
               ))}
             </div>
           </div>
@@ -1624,6 +2072,10 @@ export default function WeekPlanner(){
         <div className="flex items-center gap-6 px-6 py-3">
           <StatsBar stats={stats}/>
           <div className="flex-1"></div>
+          <button onClick={()=>setOpenDrawer(d=>d==='completed'?null:'completed')} className="flex items-center gap-2 text-sm font-medium text-slate-500 shrink-0">
+            Completed
+            {openDrawer==='completed' ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
+          </button>
           <button onClick={()=>setOpenDrawer(d=>d==='trends'?null:'trends')} className="flex items-center gap-2 text-sm font-medium text-slate-500 shrink-0">
             Term trends
             {openDrawer==='trends' ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
@@ -1633,6 +2085,11 @@ export default function WeekPlanner(){
             {openDrawer==='settings' ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
           </button>
         </div>
+        {openDrawer==='completed' && (
+          <div className="max-h-80 overflow-y-auto border-t border-slate-100 px-6 py-4">
+            <CompletedPanel records={records}/>
+          </div>
+        )}
         {openDrawer==='trends' && (
           <div className="max-h-80 overflow-y-auto border-t border-slate-100 px-6 py-4">
             <TrendsPanel weeklySnapshots={weeklySnapshots} weeklyVolume={weeklyVolume} accuracy={accuracy}/>
@@ -1665,6 +2122,17 @@ export default function WeekPlanner(){
               <button onClick={dismissTimePrompt} className="text-xs text-slate-400 shrink-0">Skip</button>
             </div>
           )}
+        </div>
+      )}
+      {pendingUndo && (
+        <div className="toast-pop fixed bottom-6 left-6 z-50 bg-slate-900 text-white rounded-2xl shadow-2xl px-5 py-3 flex items-center gap-3">
+          <Trash2 className="w-4 h-4 text-slate-400 shrink-0"/>
+          <span className="text-sm">
+            Deleted <span className="font-medium">{pendingUndo.task.title}</span>
+          </span>
+          <button onClick={undoDelete} className="flex items-center gap-1 text-xs bg-amber-400 text-slate-900 rounded-lg px-2.5 py-1.5 font-medium shrink-0">
+            <Undo2 className="w-3 h-3"/> Undo
+          </button>
         </div>
       )}
     </div>

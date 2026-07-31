@@ -21,8 +21,6 @@ const MIN_ACCURACY_SAMPLE = 5;
 // Quick-pick durations for the add-task form. Note 60min and "1 hour" are the same
 // value, so they're a single option here rather than two identical buttons.
 const DURATION_PRESETS = [
-  { minutes: 5,  label: '5m' },
-  { minutes: 10, label: '10m' },
   { minutes: 15, label: '15m' },
   { minutes: 30, label: '30m' },
   { minutes: 60, label: '1h' },
@@ -48,6 +46,7 @@ const DEFAULT_REC_WEEKLY = [
   { id: 'rec-week-2', title: 'Homework printing and prep', duration: 15, day: 3 },
   { id: 'rec-week-3', title: 'Collate student data', duration: 10, day: null },
   { id: 'rec-week-4', title: 'Evaluations', duration: 15, day: null },
+  { id: 'rec-week-5', title: 'Clean up emails', duration: 15, day: null },
 ];
 const CELEBRATION_MESSAGES = [
   'Nice one.',
@@ -123,7 +122,16 @@ function generateRecurringInstances(existingTasks, recDaily, recWeekly, now, las
   }
   return { newTasks, newLastGenWeek: toDateStr(thisWeekMonday) };
 }
-const MIN_CHUNK = 5; // minutes — never carve off a sliver smaller than this when splitting a task
+// Never carve a task into a piece smaller than this. Raised from 5 to 15 because a
+// 5-minute fragment of a real task is usually swallowed whole by the cost of
+// remembering where you were — you reload context and the slot is gone. The trade-off
+// is deliberate: small leftovers in a block now stay EMPTY rather than being filled
+// with an unusable sliver, so expect marginally more overflow in exchange for
+// sessions that are actually long enough to make progress in.
+const MIN_CHUNK = 15;
+// The floor for any task's own duration, matching MIN_CHUNK so a task can never be
+// created smaller than the smallest piece the scheduler is willing to carve.
+const MIN_TASK_MINUTES = 15;
 /*
   SESSIONS MODEL (carve once, then fixed forever)
   ------------------------------------------------
@@ -385,8 +393,24 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockR
       });
       if (laterFit) return false; // hold this piece back; a better slot exists later
     }
-    if (inst.remaining >= MIN_CHUNK){
-      const carvedMinutes = inst.remaining;
+    /*
+      CARVING — both halves must clear MIN_CHUNK, not just the piece placed here.
+
+      Taking the whole of inst.remaining looks right but silently breaks the floor:
+      a 45min task meeting a 20min slot would carve 20 and leave 25; that 25 later
+      meets a 15min slot, carves 15, and leaves 10 — which then places WHOLE via the
+      "it fits" branch above, with no floor check, producing exactly the 10-minute
+      fragment the floor exists to prevent. Caught by the fuzz test: 303 sub-floor
+      pieces across 400 trials, all of them remainders rather than direct carves.
+
+      So the carve is capped at (front - MIN_CHUNK): whatever is taken here must leave
+      at least a viable session behind. If that cap drops below MIN_CHUNK itself,
+      there's no split of this piece where both halves are usable, so we decline the
+      slot entirely and let the task find a bigger one.
+    */
+    const maxCarveLeavingViableRemainder = front.minutesTotal - MIN_CHUNK;
+    const carvedMinutes = Math.min(inst.remaining, maxCarveLeavingViableRemainder);
+    if (carvedMinutes >= MIN_CHUNK){
       const remainderMinutes = front.minutesTotal - carvedMinutes;
       const carvedId = genId();
       const remainderId = genId();
@@ -1202,7 +1226,7 @@ function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, 
   const [dueDate,setDueDate] = useState(existingTask && existingTask.dueDate ? existingTask.dueDate : '');
   const [pressing,setPressing] = useState(existingTask ? !!existingTask.pressing : false);
 
-  const mins = Math.max(5, Number(duration)||15);
+  const mins = Math.max(MIN_TASK_MINUTES, Number(duration)||MIN_TASK_MINUTES);
   /*
     ENTRY-TIME FIT WARNING — the scheduler will happily shred an oversized task into
     slivers across many blocks, or overflow it entirely, without ever saying so at the
@@ -1235,7 +1259,7 @@ function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, 
   */
   const hasUsableAccuracy = accuracy && accuracy.count >= MIN_ACCURACY_SAMPLE
     && (accuracy.ratio > 1.1 || accuracy.ratio < 0.9);
-  const adjustedMins = hasUsableAccuracy ? Math.max(5, Math.round((mins*accuracy.ratio)/5)*5) : null;
+  const adjustedMins = hasUsableAccuracy ? Math.max(MIN_TASK_MINUTES, Math.round((mins*accuracy.ratio)/5)*5) : null;
   const showAdjustment = hasUsableAccuracy && adjustedMins !== mins;
   const runsOver = hasUsableAccuracy && accuracy.ratio > 1;
 
@@ -1270,7 +1294,7 @@ function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, 
           </button>
         </div>
         {customDuration && (
-          <input type="number" min="5" step="5" value={duration} onChange={e=>setDuration(e.target.value)}
+          <input type="number" min={MIN_TASK_MINUTES} step="5" value={duration} onChange={e=>setDuration(e.target.value)}
             placeholder="minutes" aria-label="Custom duration in minutes"
             className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
         )}
@@ -1315,7 +1339,7 @@ function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, 
 }
 function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setRecWeekly, onClearBacklog, backlogCount, slotsUnlocked }){
   const [newSlot,setNewSlot] = useState({ day:1, start:'', end:'', restricted:false });
-  const [newDaily,setNewDaily] = useState({ title:'', duration:10, preference:'', autoExpire:false });
+  const [newDaily,setNewDaily] = useState({ title:'', duration:15, preference:'', autoExpire:false });
   const [newWeekly,setNewWeekly] = useState({ title:'', duration:15, day:'' });
   function addSlot(){
     if (!newSlot.start || !newSlot.end) return;
@@ -1324,12 +1348,12 @@ function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setR
   }
   function addDaily(){
     if (!newDaily.title.trim()) return;
-    setRecDaily(prev=>[...prev, { id:genId(), title:newDaily.title.trim(), duration:Math.max(5,Number(newDaily.duration)||10), preference:newDaily.preference||null, autoExpire: !!newDaily.autoExpire }]);
-    setNewDaily({ title:'', duration:10, preference:'', autoExpire:false });
+    setRecDaily(prev=>[...prev, { id:genId(), title:newDaily.title.trim(), duration:Math.max(MIN_TASK_MINUTES,Number(newDaily.duration)||MIN_TASK_MINUTES), preference:newDaily.preference||null, autoExpire: !!newDaily.autoExpire }]);
+    setNewDaily({ title:'', duration:15, preference:'', autoExpire:false });
   }
   function addWeekly(){
     if (!newWeekly.title.trim()) return;
-    setRecWeekly(prev=>[...prev, { id:genId(), title:newWeekly.title.trim(), duration:Math.max(5,Number(newWeekly.duration)||15), day: newWeekly.day===''?null:Number(newWeekly.day) }]);
+    setRecWeekly(prev=>[...prev, { id:genId(), title:newWeekly.title.trim(), duration:Math.max(MIN_TASK_MINUTES,Number(newWeekly.duration)||MIN_TASK_MINUTES), day: newWeekly.day===''?null:Number(newWeekly.day) }]);
     setNewWeekly({ title:'', duration:15, day:'' });
   }
   const sortedSlots = [...slots].sort((a,b)=> a.day-b.day || a.start.localeCompare(b.start));
@@ -1653,6 +1677,9 @@ export default function WeekPlanner(){
             }
             if (!migratedRecWeekly.some(r=>r.id==='rec-week-4')){
               migratedRecWeekly = [...migratedRecWeekly, { id:'rec-week-4', title:'Evaluations', duration:15, day:null }];
+            }
+            if (!migratedRecWeekly.some(r=>r.id==='rec-week-5')){
+              migratedRecWeekly = [...migratedRecWeekly, { id:'rec-week-5', title:'Clean up emails', duration:15, day:null }];
             }
             setRecWeekly(migratedRecWeekly);
           }

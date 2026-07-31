@@ -76,12 +76,17 @@ function genId(){ idSeq += 1; return 'id-'+Date.now().toString(36)+'-'+idSeq; }
 /* ============================================================
    Scheduling engine (verified separately with node before wiring into the UI)
    ============================================================ */
-function makeTask({ title, duration, dueDate, recurringId=null, source='adhoc', pressing=false, order, preference=null }){
-  return { id: genId(), title, duration: Number(duration), dueDate, pressing, done:false, doneAt:null, createdAt: order, source, recurringId, preference, actualMinutes:null, pinnedTo: null };
+function makeTask({ title, duration, dueDate, recurringId=null, recurringDate=null, source='adhoc', pressing=false, order, preference=null }){
+  // recurringDate: the date this instance was GENERATED for. Kept separate from dueDate
+  // because dueDate is user-editable (see instance editing) and the generator's
+  // duplicate check keys on this — if it keyed on dueDate, moving an instance's date
+  // would make the generator think that week's instance was missing and create another.
+  return { id: genId(), title, duration: Number(duration), dueDate, pressing, done:false, doneAt:null, createdAt: order, source, recurringId, recurringDate, preference, actualMinutes:null, pinnedTo: null };
 }
 function generateRecurringInstances(existingTasks, recDaily, recWeekly, now, lastGenWeek){
   const newTasks = [];
-  const existingKeys = new Set(existingTasks.filter(t=>t.recurringId).map(t=>t.recurringId+'|'+t.dueDate));
+  // Fall back to dueDate for instances generated before recurringDate existed.
+  const existingKeys = new Set(existingTasks.filter(t=>t.recurringId).map(t=>t.recurringId+'|'+(t.recurringDate||t.dueDate)));
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const thisWeekMonday = startOfWeek(today);
   let start = lastGenWeek ? addDays(parseDateStr(lastGenWeek), 7) : thisWeekMonday;
@@ -104,7 +109,7 @@ function generateRecurringInstances(existingTasks, recDaily, recWeekly, now, las
         recDaily.forEach(def=>{
           const key = def.id+'|'+dateStr;
           if (!existingKeys.has(key)){
-            newTasks.push(makeTask({ title: def.title, duration: def.duration, dueDate: dateStr, recurringId: def.id, source:'daily', order: order++, preference: def.preference||null }));
+            newTasks.push(makeTask({ title: def.title, duration: def.duration, dueDate: dateStr, recurringId: def.id, recurringDate: dateStr, source:'daily', order: order++, preference: def.preference||null }));
             existingKeys.add(key);
           }
         });
@@ -115,7 +120,7 @@ function generateRecurringInstances(existingTasks, recDaily, recWeekly, now, las
       const dateStr = toDateStr(targetDate);
       const key = def.id+'|'+dateStr;
       if (!existingKeys.has(key)){
-        newTasks.push(makeTask({ title: def.title, duration: def.duration, dueDate: dateStr, recurringId: def.id, source:'weekly', order: order++ }));
+        newTasks.push(makeTask({ title: def.title, duration: def.duration, dueDate: dateStr, recurringId: def.id, recurringDate: dateStr, source:'weekly', order: order++ }));
         existingKeys.add(key);
       }
     });
@@ -725,15 +730,20 @@ function buildSchedule(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockRestr
   than piling up as an overdue task competing for tomorrow's slots).
   A task marked `pressing` is never auto-expired — an explicit flag on it means the
   person cared enough to mark it, so it should stay until they deal with it themselves.
-  Tasks whose definition doesn't set autoExpire (or isn't a daily recurring task at all)
-  are untouched and keep carrying over exactly as before.
+  Tasks whose definition doesn't set autoExpire are untouched and keep carrying over.
+
+  Now covers WEEKLY definitions too, not just daily. Weekly recurring work is where
+  backlog compounds worst: five weekly tasks missed for three weeks is fifteen overdue
+  items competing for the same slots, most of which no longer need doing at all —
+  nobody collates last fortnight's student data. Expiry is per-definition and opt-in,
+  so anything you genuinely want to carry over still does.
 */
-function applyAutoExpiry(tasks, recDaily, todayStr){
+function applyAutoExpiry(tasks, recDaily, recWeekly, todayStr){
   let changed = false;
   const next = tasks.map(t=>{
     if (t.done || t.pressing || !t.recurringId) return t;
     if (!(t.dueDate && t.dueDate < todayStr)) return t;
-    const def = recDaily.find(d=>d.id===t.recurringId);
+    const def = recDaily.find(d=>d.id===t.recurringId) || recWeekly.find(d=>d.id===t.recurringId);
     if (def && def.autoExpire){
       changed = true;
       return { ...t, done:true, doneAt:Date.now(), autoExpired:true };
@@ -1174,11 +1184,9 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
                             <Pin className="w-3 h-3 text-indigo-500" fill="currentColor"/>
                           </button>
                         )}
-                        {!t.recurringId && (
-                          <button onClick={()=>onEdit(t.id)} aria-label={`Edit ${t.title}`} className="text-slate-300 shrink-0 hover:text-slate-500" title="Edit this task">
-                            <Pencil className="w-3 h-3"/>
-                          </button>
-                        )}
+                        <button onClick={()=>onEdit(t.id)} aria-label={`Edit ${t.title}`} className="text-slate-300 shrink-0 hover:text-slate-500" title={t.recurringId ? 'Edit just this occurrence' : 'Edit this task'}>
+                          <Pencil className="w-3 h-3"/>
+                        </button>
                         <button onClick={()=>onTogglePressing(t.id)} aria-label={t.pressing?`Unmark ${t.title} as pressing`:`Mark ${t.title} as pressing`} className="shrink-0" title="Pressing — can use catch-up blocks">
                           <Star className={`w-3 h-3 ${t.pressing?'text-amber-500':'text-slate-300'}`} fill={t.pressing?'currentColor':'none'}/>
                         </button>
@@ -1216,6 +1224,7 @@ function StatsBar({ stats }){
 }
 function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, totalWeeklyMinutes=0, accuracy=null }){
   const isEditing = !!existingTask;
+  const isRecurringInstance = !!(existingTask && existingTask.recurringId);
   const [title,setTitle] = useState(existingTask ? existingTask.title : '');
   const [duration,setDuration] = useState(existingTask ? existingTask.duration : 15);
   // "Other" is pre-opened when editing a task whose duration isn't one of the presets,
@@ -1275,9 +1284,14 @@ function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-slate-900">{isEditing ? 'Edit task' : 'Add a task'}</span>
+        <span className="text-sm font-semibold text-slate-900">{isEditing ? (isRecurringInstance ? 'Edit this occurrence' : 'Edit task') : 'Add a task'}</span>
         <button type="button" onClick={onClose} aria-label="Close form" className="text-slate-400"><X className="w-4 h-4"/></button>
       </div>
+      {isRecurringInstance && (
+        <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1.5">
+          This changes only this one occurrence. The repeating task itself stays as it is — edit that under Time slots &amp; recurring tasks.
+        </div>
+      )}
       <input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={handleTitleKeyDown} placeholder="What needs doing?" aria-label="Task title" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
       <div>
         <label className="text-xs text-slate-400 block mb-1">How long?</label>
@@ -1418,9 +1432,14 @@ function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setR
         <h3 className="text-xs font-semibold text-slate-900 mb-2 uppercase tracking-widest">Weekly recurring</h3>
         <div className="space-y-1.5">
           {recWeekly.map(r=>(
-            <div key={r.id} className="flex items-center justify-between text-sm bg-white border border-slate-200 rounded-xl px-3 py-2">
-              <span className="text-slate-700">{r.title} · {r.duration}min{r.day!=null && ` · ${DAY_SHORT[r.day]}`}</span>
-              <button onClick={()=>setRecWeekly(prev=>prev.filter(x=>x.id!==r.id))} aria-label={`Delete recurring task ${r.title}`} className="text-slate-300"><Trash2 className="w-3.5 h-3.5"/></button>
+            <div key={r.id} className="flex items-center justify-between text-sm bg-white border border-slate-200 rounded-xl px-3 py-2 gap-2">
+              <span className="text-slate-700 flex-1 min-w-0">{r.title} · {r.duration}min{r.day!=null && ` · ${DAY_SHORT[r.day]}`}</span>
+              <button onClick={()=>setRecWeekly(prev=>prev.map(x=>x.id===r.id?{...x,autoExpire:!x.autoExpire}:x))}
+                className={`text-[10px] px-1.5 py-1 rounded-lg border shrink-0 ${r.autoExpire?'border-amber-300 text-amber-700 bg-amber-50':'border-slate-200 text-slate-400'}`}
+                title={r.autoExpire ? 'A missed week is dropped rather than carried forward' : 'A missed week keeps carrying over as overdue'}>
+                {r.autoExpire ? 'Auto-expires' : 'Carries over'}
+              </button>
+              <button onClick={()=>setRecWeekly(prev=>prev.filter(x=>x.id!==r.id))} aria-label={`Delete recurring task ${r.title}`} className="text-slate-300 shrink-0"><Trash2 className="w-3.5 h-3.5"/></button>
             </div>
           ))}
         </div>
@@ -1593,7 +1612,25 @@ export default function WeekPlanner(){
   const [editingTaskId,setEditingTaskId] = useState(null); // task currently open in the edit form, or null
   const [pendingUndo,setPendingUndo] = useState(null); // { task, timeoutId } — a just-deleted task that can still be restored
   useEffect(()=>{
-    const t = setInterval(()=>setNow(new Date()), 30000);
+    /*
+      Tick on the MINUTE, not every 30 seconds. `now` feeds buildSchedule and five
+      effects, but the schedule can only actually change when the clock crosses a
+      minute boundary (slot starts/ends are minute-granular). Returning the SAME
+      Date object when the minute hasn't moved makes React bail out of the re-render
+      entirely, so nothing downstream recomputes. Cheap today; important once writes
+      go to a cloud backend and every needless recompute costs a round trip.
+    */
+    const t = setInterval(()=>{
+      setNow(prev=>{
+        const next = new Date();
+        const sameMinute = next.getMinutes()===prev.getMinutes()
+          && next.getHours()===prev.getHours()
+          && next.getDate()===prev.getDate()
+          && next.getMonth()===prev.getMonth()
+          && next.getFullYear()===prev.getFullYear();
+        return sameMinute ? prev : next;
+      });
+    }, 15000);
     return ()=>clearInterval(t);
   },[]);
   /*
@@ -1707,8 +1744,8 @@ export default function WeekPlanner(){
   useEffect(()=>{
     if (!loaded) return;
     const todayStrNow = toDateStr(now);
-    setTasks(prev=>applyAutoExpiry(prev, recDaily, todayStrNow));
-  },[loaded, now, recDaily]);
+    setTasks(prev=>applyAutoExpiry(prev, recDaily, recWeekly, todayStrNow));
+  },[loaded, now, recDaily, recWeekly]);
   useEffect(()=>{
     if (!loaded) return;
     const todayStrNow = toDateStr(now);
@@ -2076,6 +2113,15 @@ export default function WeekPlanner(){
               <Pin className="w-3.5 h-3.5 shrink-0" fill="currentColor"/>
               <span className="flex-1">{pinnedCount} task{pinnedCount>1?'s are':' is'} manually pinned and won't be moved by the scheduler.</span>
               <button onClick={clearAllPins} className="shrink-0 underline font-medium">Clear all pins</button>
+            </div>
+          )}
+          {backlogCount>0 && (
+            <div className="mb-3 text-xs text-orange-900 bg-orange-50 border border-orange-200 rounded-xl px-3 py-2 shrink-0 flex items-center gap-2">
+              <span className="flex-1">
+                {backlogCount} repeating task{backlogCount>1?'s have':' has'} rolled over unfinished and {backlogCount>1?'are':'is'} still competing for your slots.
+                {' '}Old housekeeping work rarely needs doing — clear it, or set those tasks to auto-expire in settings.
+              </span>
+              <button onClick={clearBacklog} className="shrink-0 underline font-medium">Clear {backlogCount}</button>
             </div>
           )}
           {allPlaced && (

@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2 } from 'lucide-react';
+import { useAuth, useCloudTasks, useCloudDoc, importFromThisBrowser } from './cloudSync';
+import { SyncBadge } from './AuthGate';
 /* ============================================================
    Constants — your real week template
    ============================================================ */
 const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const DAY_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const WEEKDAY_DAYS = [1,2,3,4,5]; // Mon-Fri — days that check emails / evaluations recur on
-const STORAGE_KEY = 'week-planner-state-v1';
 const SNAPSHOT_HISTORY_WEEKS = 52; // keep about a year of weekly workload snapshots, then drop the oldest
 const SCHEDULE_WEEKS = 3; // how far ahead the scheduler looks AND how far the board renders — one constant so the two can never drift apart
 const ARCHIVE_AFTER_DAYS = 60; // completed tasks older than this are compacted into the archive
@@ -1593,12 +1594,31 @@ function TrendsPanel({ weeklySnapshots, weeklyVolume, accuracy }){
    Main component
    ============================================================ */
 export default function WeekPlanner(){
-  const [loaded,setLoaded] = useState(false);
-  const [tasks,setTasks] = useState([]);
-  const [slots,setSlots] = useState(DEFAULT_SLOTS);
-  const [recDaily,setRecDaily] = useState(DEFAULT_REC_DAILY);
-  const [recWeekly,setRecWeekly] = useState(DEFAULT_REC_WEEKLY);
-  const [lastGenWeek,setLastGenWeek] = useState(null);
+  const { user, signOut } = useAuth();
+  const [tasks, setTasks, syncStatus, tasksLoaded] = useCloudTasks(user?.uid);
+  const [appState, setAppState, appLoaded] = useCloudDoc(user?.uid, 'app', {
+    slots: DEFAULT_SLOTS,
+    recDaily: DEFAULT_REC_DAILY,
+    recWeekly: DEFAULT_REC_WEEKLY,
+    lastGenWeek: null,
+    weeklySnapshots: {},
+    archive: [],
+  });
+  const { slots, recDaily, recWeekly, lastGenWeek, weeklySnapshots, archive } = appState;
+  // True once BOTH cloud collections have delivered their first real snapshot.
+  // Everything below that generates, expires, or archives tasks must wait for this —
+  // running any of it against the hooks' empty starting values (before Firestore has
+  // actually replied) would generate a duplicate week's worth of recurring tasks, or
+  // silently expire/archive nothing against zero real data. Same role `loaded` played
+  // for the old synchronous localStorage read; async cloud data just makes it matter
+  // more, since the gap before the first reply is no longer instantaneous.
+  const loaded = !!user && tasksLoaded && appLoaded;
+  function setSlots(updater){ setAppState(prev => ({ ...prev, slots: typeof updater==='function' ? updater(prev.slots) : updater })); }
+  function setRecDaily(updater){ setAppState(prev => ({ ...prev, recDaily: typeof updater==='function' ? updater(prev.recDaily) : updater })); }
+  function setRecWeekly(updater){ setAppState(prev => ({ ...prev, recWeekly: typeof updater==='function' ? updater(prev.recWeekly) : updater })); }
+  function setLastGenWeek(updater){ setAppState(prev => ({ ...prev, lastGenWeek: typeof updater==='function' ? updater(prev.lastGenWeek) : updater })); }
+  function setWeeklySnapshots(updater){ setAppState(prev => ({ ...prev, weeklySnapshots: typeof updater==='function' ? updater(prev.weeklySnapshots) : updater })); }
+  function setArchive(updater){ setAppState(prev => ({ ...prev, archive: typeof updater==='function' ? updater(prev.archive) : updater })); }
   const [now,setNow] = useState(new Date());
   const [showAdd,setShowAdd] = useState(false);
   const [openDrawer,setOpenDrawer] = useState(null); // null | 'settings' | 'trends' — accordion, so only one eats bottom-bar height at a time
@@ -1607,8 +1627,6 @@ export default function WeekPlanner(){
   const [draggingTaskId,setDraggingTaskId] = useState(null); // id of the task currently being dragged, or null
   const [dragOverKey,setDragOverKey] = useState(null); // instance key of the slot currently hovered during a drag
   const [explainingKey,setExplainingKey] = useState(null); // which placed session is showing its "why is this here?" explanation
-  const [weeklySnapshots,setWeeklySnapshots] = useState({}); // { 'YYYY-MM-DD' (week start): { level, overflowMinutes } } — history for the term trend view
-  const [archive,setArchive] = useState([]); // compacted completion records for tasks older than ARCHIVE_AFTER_DAYS
   const [editingTaskId,setEditingTaskId] = useState(null); // task currently open in the edit form, or null
   const [pendingUndo,setPendingUndo] = useState(null); // { task, timeoutId } — a just-deleted task that can still be restored
   useEffect(()=>{
@@ -1664,71 +1682,6 @@ export default function WeekPlanner(){
     return ()=>clearTimeout(t);
   },[toast]);
   useEffect(()=>{
-    (()=>{
-      try {
-        const rawValue = window.localStorage.getItem(STORAGE_KEY);
-        if (rawValue){
-          const data = JSON.parse(rawValue);
-          if (data.tasks){
-            // migration: the energy/intensity system has been removed entirely — strip
-            // any leftover `intensity` field from tasks saved before this change so old
-            // data doesn't carry dead keys forward indefinitely. Also default the newer
-            // `pinnedTo` field (manual drag-and-drop placement) to null for older tasks.
-            const migratedTasks = data.tasks.map(t=>{
-              const { intensity, ...rest } = t;
-              return { ...rest, pinnedTo: rest.pinnedTo !== undefined ? rest.pinnedTo : null };
-            });
-            setTasks(migratedTasks);
-          }
-          if (data.slots){
-            // migration: strip any leftover `energy` field (energy system removed) and
-            // `reserved` field (the "big tasks only" reserved-slot restriction has also
-            // been removed — those blocks are now plain open slots) from slots saved
-            // before these changes.
-            const migratedSlots = data.slots.map(s=>{
-              const { energy, reserved, ...rest } = s;
-              return rest;
-            });
-            setSlots(migratedSlots);
-          }
-          if (data.recDaily){
-            // "Check emails" and "Evaluations" are no longer daily recurring definitions
-            // — filtering by id is naturally idempotent, safe to run every load. Any
-            // already-generated instances of either stay put as regular leftover tasks;
-            // this only stops NEW ones from being generated going forward.
-            const migratedRecDaily = data.recDaily
-              .filter(r=>r.id!=='rec-daily-1' && r.id!=='rec-daily-2')
-              .map(r=>{
-                if (r.autoExpire !== undefined) return r;
-                const def = DEFAULT_REC_DAILY.find(d=>d.id===r.id);
-                return { ...r, autoExpire: def ? def.autoExpire : false };
-              });
-            setRecDaily(migratedRecDaily);
-          }
-          if (data.recWeekly){
-            // add new weekly recurring tasks once each, if this saved state predates
-            // them — id-checked, so safe to run on every load.
-            let migratedRecWeekly = data.recWeekly;
-            if (!migratedRecWeekly.some(r=>r.id==='rec-week-3')){
-              migratedRecWeekly = [...migratedRecWeekly, { id:'rec-week-3', title:'Collate student data', duration:10, day:null }];
-            }
-            if (!migratedRecWeekly.some(r=>r.id==='rec-week-4')){
-              migratedRecWeekly = [...migratedRecWeekly, { id:'rec-week-4', title:'Evaluations', duration:15, day:null }];
-            }
-            if (!migratedRecWeekly.some(r=>r.id==='rec-week-5')){
-              migratedRecWeekly = [...migratedRecWeekly, { id:'rec-week-5', title:'Clean up emails', duration:15, day:null }];
-            }
-            setRecWeekly(migratedRecWeekly);
-          }
-          if (data.lastGenWeek) setLastGenWeek(data.lastGenWeek);
-          if (data.weeklySnapshots) setWeeklySnapshots(data.weeklySnapshots);
-          if (data.archive) setArchive(data.archive);
-        }
-      } catch(e){ /* first ever run — keep defaults */ }
-      setLoaded(true);
-    })();
-  },[]);
-  useEffect(()=>{
     if (!loaded) return;
     // NOTE: deliberately NOT short-circuiting when this week has already been
     // generated. A recurring definition added mid-week must produce its instances
@@ -1762,12 +1715,6 @@ export default function WeekPlanner(){
     setArchive(result.archive);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[loaded, now]);
-  useEffect(()=>{
-    if (!loaded) return;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks, slots, recDaily, recWeekly, lastGenWeek, weeklySnapshots, archive }));
-    } catch(e){ /* storage unavailable or full — silently skip, same as before */ }
-  },[tasks, slots, recDaily, recWeekly, lastGenWeek, weeklySnapshots, archive, loaded]);
   // Baseline schedule: catch-up slots ALWAYS gated here, regardless of workload level —
   // this is what the traffic light itself is diagnosed from, so the diagnosis never
   // depends on whether the unlock is currently active (see computeWorkload for why).
@@ -2012,6 +1959,14 @@ export default function WeekPlanner(){
   function clearBacklog(){
     setTasks(prev=>prev.map(t=> (!t.done && t.recurringId && t.dueDate<todayStr) ? {...t, done:true, doneAt:Date.now()} : t));
   }
+  async function handleManualImport(){
+    if (!user) return;
+    const result = await importFromThisBrowser(user.uid);
+    const message = result.imported
+      ? `Imported ${result.count} task${result.count===1?'':'s'} from this browser.`
+      : 'Nothing found in this browser to import.';
+    setToast({ id: Date.now(), message, askTime:false });
+  }
   if (!loaded){
     return (
       <div className="h-screen w-full flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-amber-50">
@@ -2040,8 +1995,10 @@ export default function WeekPlanner(){
           <div className="text-2xl font-semibold text-slate-900">{DAY_NAMES[now.getDay()]}, {now.toLocaleDateString('en-AU',{day:'numeric',month:'long'})}</div>
         </div>
         <div className="flex items-center gap-4">
+          <SyncBadge status={syncStatus}/>
           <WorkloadIndicator workload={workload}/>
           <div className="font-mono-plex text-3xl text-slate-300 tabular-nums">{minToLabel(nowMin)}</div>
+          <button onClick={signOut} className="text-xs text-slate-400 hover:text-slate-600 shrink-0">Sign out</button>
         </div>
       </header>
       <div className="planner-shell flex-1 p-5 overflow-hidden">
@@ -2178,6 +2135,13 @@ export default function WeekPlanner(){
               backlogCount={backlogCount}
               slotsUnlocked={slotsUnlocked}
             />
+            <button
+              onClick={handleManualImport}
+              className="w-full mt-4 text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl py-2 hover:text-slate-600 hover:border-slate-300"
+              title="Only needed if this browser has tasks that never made it to the cloud — safe to press any time, it never duplicates"
+            >
+              Import any tasks saved in this browser
+            </button>
           </div>
         )}
       </div>

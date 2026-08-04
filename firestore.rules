@@ -1,0 +1,18 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // A signed-in person can only touch documents under their own user ID.
+    // Nobody can read or write anyone else's week.
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == userId;
+    }
+
+    // Everything outside /users is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

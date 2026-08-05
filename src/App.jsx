@@ -292,6 +292,26 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockR
   const completedByTask = new Map(); // task.id -> array of its DONE sessions, kept exactly as-is
   const freeform = new Map();        // task.id -> [{ id, minutesTotal }] remaining pool, freely carvable
 
+  // Piece ids are derived from (task.id, a per-task counter) rather than genId(),
+  // so that an unchanged carve — same tasks/slots/priority/now — reproduces the
+  // exact same ids on every call. genId() (timestamp + global counter) produced a
+  // brand-new id for every freeform/carved piece on every single recompute, even
+  // when nothing about the task had actually changed. Since buildSchedule reruns
+  // on every render (see the "zero memory of previous shape" note above) and its
+  // sessionUpdates get persisted back onto the task (see sessionsEqual below),
+  // that meant the persisted shape never matched the next render's freshly
+  // generated ids, which never matched the render after that — an unbroken write
+  // loop that kept resetting the save debounce and left the app stuck on
+  // "Saving..." forever. A genuinely different carve (task/slot/priority actually
+  // changed) still gets different ids here, so real changes are still detected
+  // and saved correctly — only a no-op recompute now looks like a no-op.
+  const pieceCounters = new Map(); // task.id -> next piece index
+  function nextPieceId(taskId){
+    const n = pieceCounters.get(taskId) || 0;
+    pieceCounters.set(taskId, n + 1);
+    return taskId + '-s' + n;
+  }
+
   for (const task of sortedTasks){
     if (task.sessions && task.sessions.length){
       const completed = task.sessions.filter(s=>s.done).map(s=>({...s}));
@@ -299,7 +319,7 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockR
       completedByTask.set(task.id, completed);
       const remainingMinutes = Math.max(0, task.duration - doneMinutes);
       if (remainingMinutes > 0){
-        freeform.set(task.id, [{ id: genId(), minutesTotal: remainingMinutes }]);
+        freeform.set(task.id, [{ id: nextPieceId(task.id), minutesTotal: remainingMinutes }]);
       } else {
         freeform.set(task.id, []); // fully completed via its sessions already
       }
@@ -418,8 +438,8 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockR
     const carvedMinutes = Math.min(inst.remaining, maxCarveLeavingViableRemainder);
     if (carvedMinutes >= MIN_CHUNK){
       const remainderMinutes = front.minutesTotal - carvedMinutes;
-      const carvedId = genId();
-      const remainderId = genId();
+      const carvedId = nextPieceId(task.id);
+      const remainderId = nextPieceId(task.id);
       pieces.splice(0, 1, { id: carvedId, minutesTotal: carvedMinutes }, { id: remainderId, minutesTotal: remainderMinutes });
       inst.assigned.push({ ...task, id: task.id, sessionId: carvedId, duration: carvedMinutes, placementReason: placementNarrative(task, inst, kind) });
       inst.remaining -= carvedMinutes;

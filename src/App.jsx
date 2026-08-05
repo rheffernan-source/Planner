@@ -1995,7 +1995,7 @@ export default function WeekPlanner(){
     );
   }
   return (
-    <div className="week-planner-root h-screen w-full overflow-hidden bg-gradient-to-br from-slate-50 via-white to-amber-50 text-slate-800 flex flex-col">
+    <div className="week-planner-root h-full w-full overflow-hidden bg-gradient-to-br from-slate-50 via-white to-amber-50 text-slate-800 flex flex-col">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
         .font-mono-plex { font-family: 'IBM Plex Mono', ui-monospace, monospace; }

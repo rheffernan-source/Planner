@@ -1,0 +1,6 @@
+# Only the functions block lives here on purpose. Build command and publish
+# directory stay in the Netlify dashboard where they already work — keys that
+# aren't in this file fall back to the UI settings, so nothing changes there.
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"

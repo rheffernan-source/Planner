@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2 } from 'lucide-react';
+import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2, Users, CalendarPlus } from 'lucide-react';
 import { useAuth, useCloudTasks, useCloudDoc, importFromThisBrowser } from './cloudSync';
 import { SyncBadge } from './AuthGate';
 /* ============================================================
@@ -70,6 +70,9 @@ function addDays(d,n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; 
 function startOfWeek(d){ const day=d.getDay(); const diff=(day===0?-6:1-day); return addDays(new Date(d.getFullYear(),d.getMonth(),d.getDate()),diff); }
 function timeToMin(t){ const [h,m]=t.split(':').map(Number); return h*60+m; }
 function minToLabel(mins){ let h=Math.floor(mins/60), m=mins%60; const ampm=h>=12?'pm':'am'; let h12=h%12; if(h12===0)h12=12; return `${h12}:${String(m).padStart(2,'0')}${ampm}`; }
+// Inverse of timeToMin — needed when a meeting splits a slot and the resulting
+// fragment needs its own "HH:MM" bounds rather than the parent slot's.
+function minToTime(mins){ return `${String(Math.floor(mins/60)).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`; }
 function formatShortDate(dateStr){ const d = parseDateStr(dateStr); return `${DAY_SHORT[d.getDay()]} ${d.getDate()}`; }
 function formatDurationHM(mins){ if (mins<=0) return '0m'; const h=Math.floor(mins/60), m=mins%60; if (h===0) return `${m}m`; if (m===0) return `${h}h`; return `${h}h ${m}m`; }
 let idSeq = 0;
@@ -77,12 +80,24 @@ function genId(){ idSeq += 1; return 'id-'+Date.now().toString(36)+'-'+idSeq; }
 /* ============================================================
    Scheduling engine (verified separately with node before wiring into the UI)
    ============================================================ */
-function makeTask({ title, duration, dueDate, recurringId=null, recurringDate=null, source='adhoc', pressing=false, order, preference=null }){
+function makeTask({ title, duration, dueDate, recurringId=null, recurringDate=null, source='adhoc', pressing=false, order, preference=null, meetingId=null, notBefore=null }){
   // recurringDate: the date this instance was GENERATED for. Kept separate from dueDate
   // because dueDate is user-editable (see instance editing) and the generator's
   // duplicate check keys on this — if it keyed on dueDate, moving an instance's date
   // would make the generator think that week's instance was missing and create another.
-  return { id: genId(), title, duration: Number(duration), dueDate, pressing, done:false, doneAt:null, createdAt: order, source, recurringId, recurringDate, preference, actualMinutes:null, pinnedTo: null };
+  //
+  // meetingId / notBefore: set on action points that came OUT of a meeting.
+  // notBefore is { date, minute } — the moment the meeting ends. An action point
+  // can't be scheduled before the meeting that produced it has actually happened.
+  return { id: genId(), title, duration: Number(duration), dueDate, pressing, done:false, doneAt:null, createdAt: order, source, recurringId, recurringDate, preference, actualMinutes:null, pinnedTo: null, meetingId, notBefore };
+}
+// True when this slot instance starts before the task is allowed to begin.
+function blockedByNotBefore(task, inst){
+  const nb = task.notBefore;
+  if (!nb) return false;
+  if (inst.date < nb.date) return true;
+  if (inst.date === nb.date && inst.startMin < nb.minute) return true;
+  return false;
 }
 function generateRecurringInstances(existingTasks, recDaily, recWeekly, now, lastGenWeek){
   const newTasks = [];
@@ -164,7 +179,38 @@ const MIN_TASK_MINUTES = 15;
   computeWorkload below. Always false for the baseline diagnostic pass so the traffic
   light's own read never depends on whether it has already unlocked anything.
 */
-function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockRestricted=false, demotedTaskIds=null){
+/*
+  MEETINGS EAT FLEX TIME.
+
+  A meeting is a fixed commitment, not capacity — it isn't scheduled INTO a slot,
+  it simply occupies wall-clock time, and any flex slot underneath it stops being
+  usable. Drawing meetings on the board without doing this subtraction would let
+  the scheduler keep placing work into hours you're sitting in a meeting, and
+  would make the traffic light, the overflow warnings, and the "everything has a
+  home" banner all quietly wrong.
+
+  Returns the still-free pieces of [slotStart, slotEnd) once every meeting on that
+  date is carved out. A meeting covering the whole slot yields nothing; one landing
+  mid-slot yields the time on BOTH sides, because a 115-minute block interrupted by
+  a half-hour meeting still has two perfectly usable stretches in it. Fragments
+  shorter than MIN_CHUNK are dropped — the scheduler can't place anything in them
+  anyway, so keeping them would just overstate capacity.
+*/
+function freeIntervalsWithin(slotStartMin, slotEndMin, meetingsOnDate){
+  let intervals = [[slotStartMin, slotEndMin]];
+  for (const m of meetingsOnDate){
+    const mStart = timeToMin(m.start), mEnd = timeToMin(m.end);
+    const next = [];
+    for (const [s,e] of intervals){
+      if (mEnd <= s || mStart >= e){ next.push([s,e]); continue; } // no overlap
+      if (mStart > s) next.push([s, mStart]);   // free time before the meeting
+      if (mEnd < e) next.push([mEnd, e]);       // free time after the meeting
+    }
+    intervals = next;
+  }
+  return intervals.filter(([s,e]) => e - s >= MIN_CHUNK);
+}
+function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockRestricted=false, demotedTaskIds=null, meetings=[]){
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayStr = toDateStr(today);
   const nowMin = now.getHours()*60+now.getMinutes();
@@ -174,11 +220,22 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockR
     const d = addDays(today,i);
     const dow = d.getDay();
     const dateStr = toDateStr(d);
+    const meetingsToday = meetings.filter(m=>m.date===dateStr);
     slots.forEach(slot=>{
       if (slot.day===dow){
         const startMin=timeToMin(slot.start), endMin=timeToMin(slot.end);
         if (dateStr===todayStr && endMin<=nowMin) return;
-        instances.push({ key: slot.id+'|'+dateStr, slotId:slot.id, date:dateStr, dayOfWeek:dow, start:slot.start, end:slot.end, startMin, endMin, restricted:slot.restricted, remaining:endMin-startMin, assigned:[] });
+        // One instance per free piece. Un-met slots produce exactly one piece
+        // spanning the whole slot, so the common case is unchanged.
+        const pieces = freeIntervalsWithin(startMin, endMin, meetingsToday);
+        pieces.forEach(([pieceStart, pieceEnd], pieceIdx)=>{
+          if (dateStr===todayStr && pieceEnd<=nowMin) return;
+          // Fragments keep the parent slotId so manual pins still resolve (see
+          // clearStalePins, which keys on slotId); the key gets a suffix only
+          // when a slot actually split, keeping existing keys stable.
+          const key = slot.id+'|'+dateStr+(pieces.length>1?'|'+pieceIdx:'');
+          instances.push({ key, slotId:slot.id, date:dateStr, dayOfWeek:dow, start:minToTime(pieceStart), end:minToTime(pieceEnd), startMin:pieceStart, endMin:pieceEnd, restricted:slot.restricted, remaining:pieceEnd-pieceStart, assigned:[], shortenedByMeeting: pieceEnd-pieceStart < endMin-startMin });
+        });
       }
     });
   }
@@ -205,6 +262,9 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockR
       if (inst.date > dueDateStr) continue;
       const canUseRestricted = inst.restricted ? isUrgent(task) : true;
       if (!canUseRestricted) continue;
+      // Time before an action point's meeting isn't available to it, so it must
+      // not count toward slack — otherwise the task looks less at-risk than it is.
+      if (blockedByNotBefore(task, inst)) continue;
       total += inst.endMin - inst.startMin;
     }
     return total;
@@ -372,6 +432,11 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockR
   }
 
   function tryPlaceOne(inst, task, ignoreLookahead=false, kind='normal'){
+    // An action point can't be worked on before the meeting that produced it has
+    // finished. This is the single funnel every placement path goes through —
+    // including pinned placement — so the guard belongs here rather than in each
+    // caller.
+    if (blockedByNotBefore(task, inst)) return false;
     // Every task's pending work is freeform now — carving is always allowed, every
     // render, so higher-priority tasks can always claim the earliest slot and push
     // lower-priority remaining work later or into a different shape.
@@ -635,7 +700,7 @@ function buildScheduleOnce(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockR
   deterministic, and directly closes the gap found in testing without attempting a
   full (NP-hard) optimal multi-task deadline solver.
 */
-function computeEligibleMinutesBeforeStandalone(task, dueDateStr, slots, now, weeksAhead, isUrgentFn){
+function computeEligibleMinutesBeforeStandalone(task, dueDateStr, slots, now, weeksAhead, isUrgentFn, meetings=[]){
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayStr = toDateStr(today);
   const nowMin = now.getHours()*60+now.getMinutes();
@@ -645,24 +710,33 @@ function computeEligibleMinutesBeforeStandalone(task, dueDateStr, slots, now, we
     const dateStr = toDateStr(d);
     if (dateStr > dueDateStr) continue;
     const dow = d.getDay();
+    const meetingsToday = meetings.filter(m=>m.date===dateStr);
     for (const slot of slots){
       if (slot.day!==dow) continue;
       const startMin=timeToMin(slot.start), endMin=timeToMin(slot.end);
       if (dateStr===todayStr && endMin<=nowMin) continue;
       const canUseRestricted = slot.restricted ? isUrgentFn(task) : true;
       if (!canUseRestricted) continue;
-      total += endMin - startMin;
+      // Must subtract meetings here too. This function decides whether a task was
+      // EVER individually achievable before its due date; counting meeting hours
+      // as available would call a task achievable when it isn't, and pass B would
+      // then demote other work to chase a deadline that was never reachable.
+      for (const [s,e] of freeIntervalsWithin(startMin, endMin, meetingsToday)){
+        if (dateStr===todayStr && e<=nowMin) continue;
+        if (blockedByNotBefore(task, { date: dateStr, startMin: s })) continue;
+        total += e - s;
+      }
     }
   }
   return total;
 }
 
-function buildSchedule(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockRestricted=false){
+function buildSchedule(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockRestricted=false, meetings=[]){
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayStr = toDateStr(today);
   const isUrgentFn = t => t.pressing || (t.dueDate && t.dueDate<todayStr);
 
-  const passA = buildScheduleOnce(tasks, slots, now, weeksAhead, unlockRestricted, null);
+  const passA = buildScheduleOnce(tasks, slots, now, weeksAhead, unlockRestricted, null, meetings);
 
   // Find due-dated, non-overdue tasks that were individually achievable but still
   // missed their deadline in pass A.
@@ -675,7 +749,7 @@ function buildSchedule(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockRestr
       : 0;
     const remaining = Math.max(0, task.duration - remainingDone);
     if (remaining<=0) continue; // already fully done
-    const eligible = computeEligibleMinutesBeforeStandalone(task, task.dueDate, slots, now, weeksAhead, isUrgentFn);
+    const eligible = computeEligibleMinutesBeforeStandalone(task, task.dueDate, slots, now, weeksAhead, isUrgentFn, meetings);
     if (eligible < remaining) continue; // never achievable even alone — pass A's overflow is correct, nothing to fix
 
     // Did it fully place on or before its due date in pass A?
@@ -742,7 +816,7 @@ function buildSchedule(tasks, slots, now, weeksAhead=SCHEDULE_WEEKS, unlockRestr
 
   if (demotedTaskIds.size===0) return passA; // nothing identifiable to demote — pass A stands
 
-  const passB = buildScheduleOnce(tasks, slots, now, weeksAhead, unlockRestricted, demotedTaskIds);
+  const passB = buildScheduleOnce(tasks, slots, now, weeksAhead, unlockRestricted, demotedTaskIds, meetings);
   return passB;
 }
 /*
@@ -1099,7 +1173,92 @@ function HeroCard({ currentInst, nextInst, onToggleDone, slotsUnlocked, atRiskId
     </div>
   );
 }
-function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, onTogglePressing, onUnpin, slotsUnlocked, atRiskIds, draggingTaskId, onDragStartTask, onDragEndTask, dragOverKey, onDragOverSlot, onDropOnSlot, explainingKey, onToggleExplain }){
+/*
+  A meeting on the board, plus the action points that came out of it.
+
+  Action points live here rather than in the meeting's edit form because the
+  useful question on the board is "what came out of this, and when am I doing
+  it?" — each one shows where the scheduler actually placed it, so the meeting
+  and its follow-up work read as a single thing.
+*/
+function MeetingRow({ meeting, actionPoints, placementByTaskId, onEditMeeting, onDeleteMeeting, onAddActionPoint, onToggleDone, onDelete }){
+  const [adding,setAdding] = useState(false);
+  const [text,setText] = useState('');
+  const mins = timeToMin(meeting.end)-timeToMin(meeting.start);
+
+  function submit(){
+    const title = text.trim();
+    if (!title) return;
+    onAddActionPoint(meeting.id, title);
+    setText('');
+    setAdding(false);
+  }
+  const open = actionPoints.filter(t=>!t.done);
+  const done = actionPoints.filter(t=>t.done);
+
+  return (
+    <div className="rounded-lg px-2 py-1.5 border border-violet-200 bg-violet-50">
+      <div className="flex items-center justify-between mb-0.5">
+        <span className="font-mono-plex text-xs text-violet-700">
+          {minToLabel(timeToMin(meeting.start))}–{minToLabel(timeToMin(meeting.end))}
+        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="font-mono-plex text-xs text-violet-400">{formatDurationHM(mins)}</span>
+          <button onClick={()=>onEditMeeting(meeting.id)} aria-label="Edit meeting" className="text-violet-300 hover:text-violet-600"><Pencil className="w-3 h-3"/></button>
+          <button onClick={()=>onDeleteMeeting(meeting.id)} aria-label="Delete meeting" className="text-violet-300 hover:text-rose-500"><Trash2 className="w-3 h-3"/></button>
+        </div>
+      </div>
+      <div className="flex items-start gap-1.5">
+        <Users className="w-3.5 h-3.5 text-violet-500 mt-0.5 shrink-0"/>
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-violet-900 break-words">{meeting.title}</div>
+          {meeting.notes && <div className="text-xs text-violet-500 break-words mt-0.5">{meeting.notes}</div>}
+        </div>
+      </div>
+
+      {(open.length>0 || done.length>0) && (
+        <div className="mt-1.5 pt-1.5 border-t border-violet-200/70 space-y-1">
+          {[...open, ...done].map(t=>{
+            const at = placementByTaskId.get(t.id);
+            return (
+              <div key={t.id} className="flex items-start gap-1.5">
+                <button onClick={()=>onToggleDone(t.id, t.id)} aria-label={t.done?'Mark not done':'Mark done'}
+                  className={`w-3.5 h-3.5 mt-0.5 rounded-full border shrink-0 flex items-center justify-center ${t.done?'bg-violet-600 border-violet-600':'border-violet-300 hover:border-violet-500'}`}>
+                  {t.done && <Check className="w-2.5 h-2.5 text-white"/>}
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div className={`text-xs break-words ${t.done?'text-violet-300 line-through':'text-violet-800'}`}>{t.title}</div>
+                  {!t.done && (
+                    <div className="text-xs text-violet-400 font-mono-plex">
+                      {at ? `→ ${formatShortDate(at.date)} ${minToLabel(at.startMin)}` : 'not yet placed'}
+                    </div>
+                  )}
+                </div>
+                <button onClick={()=>onDelete(t.id)} aria-label="Delete action point" className="text-violet-200 hover:text-rose-500 shrink-0"><Trash2 className="w-3 h-3"/></button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {adding ? (
+        <div className="mt-1.5 flex items-center gap-1">
+          <input
+            autoFocus value={text} onChange={e=>setText(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();submit();} if(e.key==='Escape'){e.preventDefault();setAdding(false);setText('');} }}
+            placeholder="What needs doing after this?" aria-label="Action point"
+            className="flex-1 min-w-0 text-xs rounded-md border border-violet-200 px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-violet-400"/>
+          <button onClick={submit} className="text-xs text-violet-700 font-medium shrink-0">Add</button>
+        </div>
+      ) : (
+        <button onClick={()=>setAdding(true)} className="mt-1.5 flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700">
+          <Plus className="w-3 h-3"/> Action point
+        </button>
+      )}
+    </div>
+  );
+}
+function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, onTogglePressing, onUnpin, slotsUnlocked, atRiskIds, draggingTaskId, onDragStartTask, onDragEndTask, dragOverKey, onDragOverSlot, onDropOnSlot, explainingKey, onToggleExplain, onEditMeeting, onDeleteMeeting, onAddActionPoint, actionPointsByMeeting, placementByTaskId }){
   const d = parseDateStr(day.date);
   return (
     <div className={`flex flex-col h-full rounded-2xl border overflow-hidden ${isToday?'border-amber-300 bg-amber-50/50':'border-slate-200 bg-white'}`}>
@@ -1109,9 +1268,25 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
         <div className="text-xs text-slate-400">{d.toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
-        {day.slots.length===0 ? (
+        {day.rows.length===0 ? (
           <div className="text-xs text-slate-300 italic py-1 px-1">No flex blocks</div>
-        ) : day.slots.map(inst=>{
+        ) : day.rows.map(row=>{
+          if (row.kind==='meeting'){
+            return (
+              <MeetingRow
+                key={'meeting|'+row.meeting.id}
+                meeting={row.meeting}
+                actionPoints={actionPointsByMeeting.get(row.meeting.id) || []}
+                placementByTaskId={placementByTaskId}
+                onEditMeeting={onEditMeeting}
+                onDeleteMeeting={onDeleteMeeting}
+                onAddActionPoint={onAddActionPoint}
+                onToggleDone={onToggleDone}
+                onDelete={onDelete}
+              />
+            );
+          }
+          const inst = row.inst;
           const isUnlockedRestricted = inst.restricted && slotsUnlocked;
           const isDropTarget = dragOverKey===inst.key;
           const capacityMinutes = inst.endMin - inst.startMin;
@@ -1372,6 +1547,68 @@ function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, 
     </div>
   );
 }
+/*
+  A meeting is a fixed commitment, so this form asks for wall-clock time directly
+  — no duration, no due date, none of the task form's fitting logic. It doesn't
+  need to fit anywhere; the schedule bends around it.
+*/
+function MeetingForm({ onSubmit, onClose, existingMeeting=null, todayStr }){
+  const isEditing = !!existingMeeting;
+  const [title,setTitle] = useState(existingMeeting?.title || '');
+  const [date,setDate] = useState(existingMeeting?.date || todayStr);
+  const [start,setStart] = useState(existingMeeting?.start || '09:00');
+  const [end,setEnd] = useState(existingMeeting?.end || '10:00');
+  const [notes,setNotes] = useState(existingMeeting?.notes || '');
+
+  const startMin = start ? timeToMin(start) : null;
+  const endMin = end ? timeToMin(end) : null;
+  const badRange = startMin!=null && endMin!=null && endMin <= startMin;
+  const durationMins = !badRange && startMin!=null && endMin!=null ? endMin-startMin : null;
+  const canSubmit = title.trim() && date && !badRange;
+
+  function submit(){
+    if (!canSubmit) return;
+    onSubmit({ title: title.trim(), date, start, end, notes: notes.trim() });
+    onClose();
+  }
+  function handleTitleKeyDown(e){
+    if (e.key === 'Enter'){ e.preventDefault(); submit(); }
+    if (e.key === 'Escape'){ e.preventDefault(); onClose(); }
+  }
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold text-slate-900">{isEditing ? 'Edit meeting' : 'Add a meeting'}</span>
+        <button type="button" onClick={onClose} aria-label="Close form" className="text-slate-400"><X className="w-4 h-4"/></button>
+      </div>
+      <input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={handleTitleKeyDown} placeholder="What's the meeting?" aria-label="Meeting title" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
+      <div>
+        <label className="text-xs text-slate-400 block mb-1">When?</label>
+        <input type="date" value={date} min={todayStr} onChange={e=>setDate(e.target.value)} aria-label="Meeting date" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
+      </div>
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <label className="text-xs text-slate-400 block mb-1">From</label>
+          <input type="time" value={start} onChange={e=>setStart(e.target.value)} aria-label="Start time" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
+        </div>
+        <div className="flex-1">
+          <label className="text-xs text-slate-400 block mb-1">To</label>
+          <input type="time" value={end} onChange={e=>setEnd(e.target.value)} aria-label="End time" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
+        </div>
+        {durationMins!=null && (
+          <span className="text-xs text-slate-400 font-mono-plex pb-2.5 shrink-0">{formatDurationHM(durationMins)}</span>
+        )}
+      </div>
+      {badRange && (
+        <div className="text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1.5">
+          The finish time needs to be after the start time.
+        </div>
+      )}
+      <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Notes (optional)" aria-label="Meeting notes" rows={2} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
+      <button type="button" onClick={submit} disabled={!canSubmit} className="w-full py-2.5 rounded-xl bg-violet-700 text-white text-sm font-medium disabled:opacity-40">{isEditing ? 'Save changes' : 'Add meeting'}</button>
+    </div>
+  );
+}
 function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setRecWeekly, onClearBacklog, backlogCount, slotsUnlocked }){
   const [newSlot,setNewSlot] = useState({ day:1, start:'', end:'', restricted:false });
   const [newDaily,setNewDaily] = useState({ title:'', duration:15, preference:'', autoExpire:false });
@@ -1625,6 +1862,14 @@ export default function WeekPlanner(){
     archive: [],
   });
   const { slots, recDaily, recWeekly, lastGenWeek, weeklySnapshots, archive } = appState;
+  // Defaulted rather than destructured: an account created before meetings
+  // existed has a stored state doc with no `meetings` key, and every consumer
+  // below iterates this.
+  //
+  // Memoised because `x || []` mints a NEW array every render whenever the key
+  // is absent, which would change the identity of a buildSchedule dependency on
+  // every single render and recompute the whole schedule forever.
+  const meetings = useMemo(()=>appState.meetings || [], [appState.meetings]);
   // True once BOTH cloud collections have delivered their first real snapshot.
   // Everything below that generates, expires, or archives tasks must wait for this —
   // running any of it against the hooks' empty starting values (before Firestore has
@@ -1638,6 +1883,7 @@ export default function WeekPlanner(){
   function setRecWeekly(updater){ setAppState(prev => ({ ...prev, recWeekly: typeof updater==='function' ? updater(prev.recWeekly) : updater })); }
   function setLastGenWeek(updater){ setAppState(prev => ({ ...prev, lastGenWeek: typeof updater==='function' ? updater(prev.lastGenWeek) : updater })); }
   function setWeeklySnapshots(updater){ setAppState(prev => ({ ...prev, weeklySnapshots: typeof updater==='function' ? updater(prev.weeklySnapshots) : updater })); }
+  function setMeetings(updater){ setAppState(prev => ({ ...prev, meetings: typeof updater==='function' ? updater(prev.meetings || []) : updater })); }
   function setArchive(updater){ setAppState(prev => ({ ...prev, archive: typeof updater==='function' ? updater(prev.archive) : updater })); }
   const [now,setNow] = useState(new Date());
   const [showAdd,setShowAdd] = useState(false);
@@ -1648,6 +1894,8 @@ export default function WeekPlanner(){
   const [dragOverKey,setDragOverKey] = useState(null); // instance key of the slot currently hovered during a drag
   const [explainingKey,setExplainingKey] = useState(null); // which placed session is showing its "why is this here?" explanation
   const [editingTaskId,setEditingTaskId] = useState(null); // task currently open in the edit form, or null
+  const [showAddMeeting,setShowAddMeeting] = useState(false);
+  const [editingMeetingId,setEditingMeetingId] = useState(null); // meeting open in the edit form, or null
   const [pendingUndo,setPendingUndo] = useState(null); // { task, timeoutId } — a just-deleted task that can still be restored
   useEffect(()=>{
     /*
@@ -1738,7 +1986,7 @@ export default function WeekPlanner(){
   // Baseline schedule: catch-up slots ALWAYS gated here, regardless of workload level —
   // this is what the traffic light itself is diagnosed from, so the diagnosis never
   // depends on whether the unlock is currently active (see computeWorkload for why).
-  const baselineSchedule = useMemo(()=>buildSchedule(tasks, slots, now), [tasks, slots, now]);
+  const baselineSchedule = useMemo(()=>buildSchedule(tasks, slots, now, SCHEDULE_WEEKS, false, meetings), [tasks, slots, now, meetings]);
   const workload = useMemo(()=>computeWorkload(tasks, baselineSchedule, slots, recDaily, recWeekly, now), [tasks, baselineSchedule, slots, recDaily, recWeekly, now]);
   // Term-trend history: write the CURRENT week's workload snapshot under its own
   // week-start key every time it changes. Past weeks' keys are never touched again once
@@ -1770,7 +2018,7 @@ export default function WeekPlanner(){
   // The schedule actually shown/used: identical to baseline unless something unlocked
   // catch-up slots, in which case everything gets recomputed once more with them open.
   const schedule = useMemo(()=>{
-    if (slotsUnlocked) return buildSchedule(tasks, slots, now, SCHEDULE_WEEKS, true);
+    if (slotsUnlocked) return buildSchedule(tasks, slots, now, SCHEDULE_WEEKS, true, meetings);
     return baselineSchedule;
   }, [slotsUnlocked, tasks, slots, now, baselineSchedule]);
   // Persist the current render's session shape back onto each task so the UI reflects
@@ -1825,11 +2073,29 @@ export default function WeekPlanner(){
   const horizonEnd = toDateStr(addDays(startOfWeek(now), SCHEDULE_WEEKS*7 - 1));
   const weekDates = [];
   for (let i=0;i<SCHEDULE_WEEKS*7;i++){ const s = toDateStr(addDays(startOfWeek(now),i)); if (s>=todayStr && s<=horizonEnd) weekDates.push(s); }
-  const groupedDays = weekDates.map(dstr=>({
-    date: dstr,
-    dayOfWeek: parseDateStr(dstr).getDay(),
-    slots: schedule.instances.filter(i=>i.date===dstr).sort((a,b)=>a.startMin-b.startMin)
-  }));
+  /*
+    Slots and meetings are interleaved into ONE time-ordered list per day rather
+    than shown as two separate stacks. The point of the board is to answer "what
+    does this day actually look like" — a meeting sitting in its real position
+    between two flex blocks answers that; a meetings section bolted above the
+    slots does not.
+  */
+  const groupedDays = weekDates.map(dstr=>{
+    const slotRows = schedule.instances
+      .filter(i=>i.date===dstr)
+      .map(inst=>({ kind:'slot', startMin: inst.startMin, inst }));
+    const meetingRows = meetings
+      .filter(mt=>mt.date===dstr)
+      // A meeting that has already finished today is history, same treatment as
+      // a flex block whose time has passed.
+      .filter(mt=>!(dstr===todayStr && timeToMin(mt.end)<=nowMin))
+      .map(mt=>({ kind:'meeting', startMin: timeToMin(mt.start), meeting: mt }));
+    return {
+      date: dstr,
+      dayOfWeek: parseDateStr(dstr).getDay(),
+      rows: [...slotRows, ...meetingRows].sort((a,b)=>a.startMin-b.startMin),
+    };
+  });
   const laterCount = schedule.instances.filter(i=>i.date>horizonEnd).reduce((sum,i)=>sum+i.assigned.length,0);
   const backlogCount = tasks.filter(t=>!t.done && t.recurringId && t.dueDate < todayStr).length;
   const pinnedCount = tasks.filter(t=>!t.done && t.pinnedTo).length;
@@ -1851,6 +2117,28 @@ export default function WeekPlanner(){
   const largestSlotMinutes = useMemo(()=>slots.reduce((max,s)=>Math.max(max, timeToMin(s.end)-timeToMin(s.start)), 0), [slots]);
   const totalWeeklyMinutes = useMemo(()=>slots.reduce((sum,s)=>sum + (timeToMin(s.end)-timeToMin(s.start)), 0), [slots]);
   const editingTask = editingTaskId ? tasks.find(t=>t.id===editingTaskId) || null : null;
+  const editingMeeting = editingMeetingId ? meetings.find(mt=>mt.id===editingMeetingId) || null : null;
+  // Action points grouped by their meeting, and where the scheduler actually put
+  // each one, so a meeting can show its follow-up work and when it's happening.
+  const actionPointsByMeeting = useMemo(()=>{
+    const byMeeting = new Map();
+    for (const t of tasks){
+      if (!t.meetingId) continue;
+      if (!byMeeting.has(t.meetingId)) byMeeting.set(t.meetingId, []);
+      byMeeting.get(t.meetingId).push(t);
+    }
+    return byMeeting;
+  }, [tasks]);
+  const placementByTaskId = useMemo(()=>{
+    const placed = new Map();
+    for (const inst of schedule.instances){
+      for (const item of inst.assigned){
+        // First placement wins — that's the soonest you'll touch it.
+        if (!placed.has(item.id)) placed.set(item.id, { date: inst.date, startMin: inst.startMin });
+      }
+    }
+    return placed;
+  }, [schedule]);
   /*
     "Everything has a home" — unfinished tasks intrude on your attention, but making a
     concrete plan for them discharges most of that intrusion; you don't have to finish
@@ -1967,6 +2255,44 @@ export default function WeekPlanner(){
   function addTask({ title, duration, dueDate, pressing }){
     setTasks(prev=>[...prev, makeTask({ title, duration, dueDate, pressing, source:'adhoc', order: Date.now() })]);
   }
+  function addMeeting({ title, date, start, end, notes }){
+    setMeetings(prev=>[...prev, { id: genId(), title, date, start, end, notes }]);
+    setShowAddMeeting(false);
+  }
+  function saveMeetingEdit({ title, date, start, end, notes }){
+    if (!editingMeetingId) return;
+    setMeetings(prev=>prev.map(mt=> mt.id===editingMeetingId ? { ...mt, title, date, start, end, notes } : mt));
+    // Moving a meeting moves the earliest moment its action points can be worked
+    // on, otherwise a meeting pushed later would leave its follow-up work sitting
+    // in slots that now sit before it.
+    setTasks(prev=>prev.map(t=> t.meetingId===editingMeetingId
+      ? { ...t, notBefore: { date, minute: timeToMin(end) } }
+      : t));
+    setEditingMeetingId(null);
+  }
+  function deleteMeeting(meetingId){
+    setMeetings(prev=>prev.filter(mt=>mt.id!==meetingId));
+    // Deliberately keeps the action points. They're real work you decided to do —
+    // deleting a calendar entry shouldn't silently bin your tasks. They just lose
+    // the link and the not-before constraint, and carry on as ordinary tasks.
+    setTasks(prev=>prev.map(t=> t.meetingId===meetingId
+      ? { ...t, meetingId: null, notBefore: null }
+      : t));
+    if (editingMeetingId===meetingId) setEditingMeetingId(null);
+  }
+  function addActionPoint(meetingId, title){
+    const mt = meetings.find(x=>x.id===meetingId);
+    if (!mt || !title.trim()) return;
+    setTasks(prev=>[...prev, makeTask({
+      title: title.trim(), duration: MIN_TASK_MINUTES, dueDate: null,
+      source: 'meeting', order: Date.now(),
+      meetingId, notBefore: { date: mt.date, minute: timeToMin(mt.end) },
+    })]);
+  }
+  function startEditingMeeting(meetingId){
+    setShowAddMeeting(false);
+    setEditingMeetingId(meetingId);
+  }
   function saveTaskEdit({ title, duration, dueDate, pressing }){
     if (!editingTaskId) return;
     setTasks(prev=>prev.map(t=> t.id===editingTaskId ? { ...t, title, duration, dueDate, pressing } : t));
@@ -2050,6 +2376,27 @@ export default function WeekPlanner(){
               />
             )}
           </div>
+          <div>
+            {editingMeeting ? (
+              <MeetingForm
+                key={editingMeeting.id}
+                existingMeeting={editingMeeting}
+                onSubmit={saveMeetingEdit}
+                onClose={()=>setEditingMeetingId(null)}
+                todayStr={todayStr}
+              />
+            ) : !showAddMeeting ? (
+              <button onClick={()=>{ setShowAddMeeting(true); setEditingMeetingId(null); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border border-violet-200 bg-white text-violet-700 font-semibold text-sm hover:bg-violet-50 transition-colors">
+                <CalendarPlus className="w-4 h-4"/> New meeting
+              </button>
+            ) : (
+              <MeetingForm
+                onSubmit={addMeeting}
+                onClose={()=>setShowAddMeeting(false)}
+                todayStr={todayStr}
+              />
+            )}
+          </div>
         </div>
         <div className="flex flex-col overflow-hidden min-h-0">
           <div className="flex items-center justify-between mb-3 shrink-0">
@@ -2112,7 +2459,7 @@ export default function WeekPlanner(){
           <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0">
             <div className="grid gap-3 h-full" style={{ gridTemplateColumns: `repeat(${Math.max(groupedDays.length,1)}, minmax(260px, 1fr))` }}>
               {groupedDays.map(day=>(
-                <DayColumn key={day.date} day={day} isToday={day.date===todayStr} weekLabel={day.date===nextWeekStart ? 'Next week' : day.date===weekThreeStart ? 'Week after' : null} onToggleDone={toggleDone} onDelete={deleteTask} onEdit={startEditing} onTogglePressing={togglePressing} onUnpin={unpinTask} slotsUnlocked={slotsUnlocked} atRiskIds={dueDateRisk.atRiskIds} draggingTaskId={draggingTaskId} onDragStartTask={handleDragStartTask} onDragEndTask={handleDragEndTask} dragOverKey={dragOverKey} onDragOverSlot={setDragOverKey} onDropOnSlot={handleDropOnSlot} explainingKey={explainingKey} onToggleExplain={toggleExplain}/>
+                <DayColumn key={day.date} day={day} isToday={day.date===todayStr} weekLabel={day.date===nextWeekStart ? 'Next week' : day.date===weekThreeStart ? 'Week after' : null} onToggleDone={toggleDone} onDelete={deleteTask} onEdit={startEditing} onTogglePressing={togglePressing} onUnpin={unpinTask} slotsUnlocked={slotsUnlocked} atRiskIds={dueDateRisk.atRiskIds} draggingTaskId={draggingTaskId} onDragStartTask={handleDragStartTask} onDragEndTask={handleDragEndTask} dragOverKey={dragOverKey} onDragOverSlot={setDragOverKey} onDropOnSlot={handleDropOnSlot} explainingKey={explainingKey} onToggleExplain={toggleExplain} onEditMeeting={startEditingMeeting} onDeleteMeeting={deleteMeeting} onAddActionPoint={addActionPoint} actionPointsByMeeting={actionPointsByMeeting} placementByTaskId={placementByTaskId}/>
               ))}
             </div>
           </div>

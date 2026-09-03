@@ -3,6 +3,7 @@ import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Sta
 import { useAuth, useCloudTasks, useCloudDoc, importFromThisBrowser } from './cloudSync';
 import { SyncBadge } from './AuthGate';
 import CaptureThought from './CaptureThought';
+import { registerForPush } from './pushNotifications';
 /* ============================================================
    Constants — your real week template
    ============================================================ */
@@ -1853,6 +1854,11 @@ function TrendsPanel({ weeklySnapshots, weeklyVolume, accuracy }){
    ============================================================ */
 export default function WeekPlanner(){
   const { user, signOut } = useAuth();
+  // Best-effort, once per sign-in. Notification.requestPermission() only
+  // actually prompts the user the first time (already-granted/denied
+  // resolves immediately), so re-running this on every reload while signed
+  // in is harmless.
+  useEffect(()=>{ if (user?.uid) registerForPush(user.uid); }, [user?.uid]);
   const [tasks, setTasks, syncStatus, tasksLoaded] = useCloudTasks(user?.uid);
   const [appState, setAppState, appLoaded] = useCloudDoc(user?.uid, 'app', {
     slots: DEFAULT_SLOTS,

@@ -38,7 +38,17 @@ export default defineConfig({
             urlPattern: /^https:\/\/identitytoolkit\.googleapis\.com\/.*/i,
             handler: "NetworkOnly",
           },
+          {
+            urlPattern: /^https:\/\/fcmregistrations\.googleapis\.com\/.*/i,
+            handler: "NetworkOnly",
+          },
         ],
+        // Merges FCM's background-message handling into THIS service worker
+        // rather than registering public/firebase-messaging-sw.js as its own
+        // worker — two service workers can't both control the '/' scope, and
+        // Firebase's default separate-file setup would silently lose the fight
+        // with the Workbox worker this plugin already generates and owns.
+        importScripts: ["firebase-messaging-sw.js"],
       },
     }),
   ],

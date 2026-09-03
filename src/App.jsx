@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2, Users, CalendarPlus } from 'lucide-react';
 import { useAuth, useCloudTasks, useCloudDoc, importFromThisBrowser } from './cloudSync';
 import { SyncBadge } from './AuthGate';
+import CaptureThought from './CaptureThought';
 /* ============================================================
    Constants — your real week template
    ============================================================ */
@@ -21,7 +22,7 @@ const HIGH_UTILISATION = 0.8;
 const MIN_ACCURACY_SAMPLE = 5;
 // Quick-pick durations for the add-task form. Note 60min and "1 hour" are the same
 // value, so they're a single option here rather than two identical buttons.
-const DURATION_PRESETS = [
+export const DURATION_PRESETS = [
   { minutes: 15, label: '15m' },
   { minutes: 30, label: '30m' },
   { minutes: 60, label: '1h' },
@@ -152,7 +153,7 @@ function generateRecurringInstances(existingTasks, recDaily, recWeekly, now, las
 const MIN_CHUNK = 15;
 // The floor for any task's own duration, matching MIN_CHUNK so a task can never be
 // created smaller than the smallest piece the scheduler is willing to carve.
-const MIN_TASK_MINUTES = 15;
+export const MIN_TASK_MINUTES = 15;
 /*
   SESSIONS MODEL (carve once, then fixed forever)
   ------------------------------------------------
@@ -2252,8 +2253,8 @@ export default function WeekPlanner(){
     setTasks(prev=>[...prev, pendingUndo.task]);
     setPendingUndo(null);
   }
-  function addTask({ title, duration, dueDate, pressing }){
-    setTasks(prev=>[...prev, makeTask({ title, duration, dueDate, pressing, source:'adhoc', order: Date.now() })]);
+  function addTask({ title, duration, dueDate, pressing, source='adhoc' }){
+    setTasks(prev=>[...prev, makeTask({ title, duration, dueDate, pressing, source, order: Date.now() })]);
   }
   function addMeeting({ title, date, start, end, notes }){
     setMeetings(prev=>[...prev, { id: genId(), title, date, start, end, notes }]);
@@ -2539,6 +2540,7 @@ export default function WeekPlanner(){
           </button>
         </div>
       )}
+      <CaptureThought uid={user.uid} onAddTodo={addTask}/>
     </div>
   );
 }

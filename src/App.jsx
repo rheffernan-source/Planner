@@ -1095,15 +1095,15 @@ function WorkloadIndicator({ workload }){
         ? `${formatDurationHM(workload.overflowMinutes)} of work won't fit this week — catch-up sessions are open to anything until this clears.`
         : `${formatDurationHM(workload.overflowMinutes)} of work is running past this week. You're at ${pct}% of remaining flex time.`;
   return (
-    <div className="flex items-center gap-2.5 px-3 py-2 rounded-2xl border border-slate-200 bg-white" title={description}>
-      <div className="flex flex-col gap-1 bg-slate-800 rounded-md px-1.5 py-1.5">
+    <div className="flex items-center gap-2.5 px-3 py-2 rounded-2xl border border-white/60 bg-white/55 backdrop-blur-md shadow-prism-soft" title={description}>
+      <div className="flex flex-col gap-1 bg-prism-navy rounded-md px-1.5 py-1.5">
         {dotConfig.map(d=>(
           <span key={d.key} className={`w-2.5 h-2.5 rounded-full ${workload.level===d.key?d.activeClass:d.dimClass}`}></span>
         ))}
       </div>
       <div className="flex flex-col leading-tight">
-        <span className="text-xs font-semibold text-slate-700">{label}</span>
-        <span className="text-xs text-slate-400">
+        <span className="text-xs font-semibold text-prism-ink">{label}</span>
+        <span className="text-xs text-prism-muted">
           {workload.remainingCapacityMinutes>0 ? `${pct}% of flex time left this week` : "This week's load"}
         </span>
       </div>
@@ -1114,21 +1114,21 @@ function HeroCard({ currentInst, nextInst, onToggleDone, slotsUnlocked, atRiskId
   const inst = currentInst || nextInst;
   if (!inst){
     return (
-      <div className="rounded-3xl px-6 py-12 text-center bg-slate-900 shadow-lg shadow-slate-900/10">
-        <div className="text-slate-400 text-sm">Nothing scheduled — add a task below</div>
+      <div className="rounded-3xl px-6 py-12 text-center bg-prism-cta shadow-prism-card">
+        <div className="text-white/70 text-sm">Nothing scheduled — add a task below</div>
       </div>
     );
   }
   const label = currentInst ? 'RIGHT NOW' : 'NEXT UP';
   const timeLabel = currentInst ? `until ${minToLabel(inst.endMin)}` : `${DAY_SHORT[inst.dayOfWeek]} ${minToLabel(inst.startMin)}`;
   const isUnlockedRestricted = inst.restricted && slotsUnlocked;
-  const emptyColor = isUnlockedRestricted ? 'text-slate-400' : inst.restricted ? 'text-rose-300' : 'text-slate-400';
+  const emptyColor = isUnlockedRestricted ? 'text-white/70' : inst.restricted ? 'text-rose-300' : 'text-white/70';
   return (
-    <div key={inst.key} className="flap rounded-3xl px-6 py-7 bg-slate-900 shadow-lg shadow-slate-900/10">
+    <div key={inst.key} className="animate-prism-flap motion-reduce:animate-none [transform-origin:top_center] rounded-3xl px-6 py-7 bg-prism-cta shadow-prism-card">
       <div className="flex items-center justify-between mb-4">
-        <Eyebrow className="text-amber-400">{label}</Eyebrow>
+        <Eyebrow className="text-white">{label}</Eyebrow>
         <div className="flex items-center gap-2">
-          <span className="font-mono-plex text-xs text-slate-400">{timeLabel}</span>
+          <span className="font-mono text-xs text-white/60">{timeLabel}</span>
         </div>
       </div>
       {inst.assigned.length===0 ? (
@@ -1150,15 +1150,15 @@ function HeroCard({ currentInst, nextInst, onToggleDone, slotsUnlocked, atRiskId
                 : '';
             return (
               <div key={inst.key+'|'+t.id} className={`flex items-start gap-3 ${rowTint}`}>
-                <button onClick={()=>onToggleDone(t.id, t.sessionId)} className={`w-7 h-7 mt-0.5 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${t.done?'bg-amber-400 border-amber-400':'border-slate-500 hover:border-amber-400'}`}>
-                  {t.done && <Check className="w-4 h-4 text-slate-900"/>}
+                <button onClick={()=>onToggleDone(t.id, t.sessionId)} aria-label={t.done?`Mark ${t.title} not done`:`Mark ${t.title} done`} className={`w-7 h-7 mt-0.5 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white ${t.done?'bg-prism-blue border-prism-blue':'border-white/40 hover:border-prism-blue'}`}>
+                  {t.done && <Check className="w-4 h-4 text-prism-ink"/>}
                 </button>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`text-lg font-medium ${t.done?'line-through text-slate-500':'text-white'}`}>{t.title}</span>
-                    {t.isPartial && <span className="font-mono-plex text-xs text-slate-400 shrink-0">part {t.chunkIndex} · {t.duration}min</span>}
-                    {t.dueDate && t.dueDate<inst.date && <span className="text-amber-400 text-xs shrink-0">from {formatShortDate(t.dueDate)}</span>}
-                    {t.pinnedTo && t.pinnedTo.slotId===inst.slotId && t.pinnedTo.date===inst.date && <Pin className="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="currentColor"/>}
+                    <span className={`text-lg font-medium ${t.done?'line-through text-white/50':'text-white'}`}>{t.title}</span>
+                    {t.isPartial && <span className="font-mono text-xs text-white/60 shrink-0">part {t.chunkIndex} · {t.duration}min</span>}
+                    {t.dueDate && t.dueDate<inst.date && <span className="text-blue-300 text-xs shrink-0">from {formatShortDate(t.dueDate)}</span>}
+                    {t.pinnedTo && t.pinnedTo.slotId===inst.slotId && t.pinnedTo.date===inst.date && <Pin className="w-3.5 h-3.5 text-violet-300 shrink-0" fill="currentColor"/>}
                     {t.pressing && <Star className="w-3.5 h-3.5 text-amber-400 shrink-0" fill="currentColor"/>}
                   </div>
                   {isAtRisk && (
@@ -1199,15 +1199,15 @@ function MeetingRow({ meeting, actionPoints, placementByTaskId, onEditMeeting, o
   const done = actionPoints.filter(t=>t.done);
 
   return (
-    <div className="rounded-lg px-2 py-1.5 border border-violet-200 bg-violet-50">
+    <div className="rounded-xl px-2 py-1.5 border border-prism-violet/25 bg-prism-violet/10 backdrop-blur-sm">
       <div className="flex items-center justify-between mb-0.5">
-        <span className="font-mono-plex text-xs text-violet-700">
+        <span className="font-mono text-xs text-violet-700">
           {minToLabel(timeToMin(meeting.start))}–{minToLabel(timeToMin(meeting.end))}
         </span>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="font-mono-plex text-xs text-violet-400">{formatDurationHM(mins)}</span>
-          <button onClick={()=>onEditMeeting(meeting.id)} aria-label="Edit meeting" className="text-violet-300 hover:text-violet-600"><Pencil className="w-3 h-3"/></button>
-          <button onClick={()=>onDeleteMeeting(meeting.id)} aria-label="Delete meeting" className="text-violet-300 hover:text-rose-500"><Trash2 className="w-3 h-3"/></button>
+          <span className="font-mono text-xs text-violet-400">{formatDurationHM(mins)}</span>
+          <button onClick={()=>onEditMeeting(meeting.id)} aria-label="Edit meeting" className="text-violet-300 hover:text-violet-600 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"><Pencil className="w-3 h-3"/></button>
+          <button onClick={()=>onDeleteMeeting(meeting.id)} aria-label="Delete meeting" className="text-violet-300 hover:text-rose-500 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"><Trash2 className="w-3 h-3"/></button>
         </div>
       </div>
       <div className="flex items-start gap-1.5">
@@ -1225,18 +1225,18 @@ function MeetingRow({ meeting, actionPoints, placementByTaskId, onEditMeeting, o
             return (
               <div key={t.id} className="flex items-start gap-1.5">
                 <button onClick={()=>onToggleDone(t.id, t.id)} aria-label={t.done?'Mark not done':'Mark done'}
-                  className={`w-3.5 h-3.5 mt-0.5 rounded-full border shrink-0 flex items-center justify-center ${t.done?'bg-violet-600 border-violet-600':'border-violet-300 hover:border-violet-500'}`}>
-                  {t.done && <Check className="w-2.5 h-2.5 text-white"/>}
+                  className={`w-7 h-7 -mt-1 -ml-1 rounded-full border shrink-0 flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${t.done?'bg-violet-600 border-violet-600':'border-violet-300 hover:border-violet-500'}`}>
+                  {t.done && <Check className="w-3.5 h-3.5 text-white"/>}
                 </button>
                 <div className="min-w-0 flex-1">
                   <div className={`text-xs break-words ${t.done?'text-violet-300 line-through':'text-violet-800'}`}>{t.title}</div>
                   {!t.done && (
-                    <div className="text-xs text-violet-400 font-mono-plex">
+                    <div className="text-xs text-violet-400 font-mono">
                       {at ? `→ ${formatShortDate(at.date)} ${minToLabel(at.startMin)}` : 'not yet placed'}
                     </div>
                   )}
                 </div>
-                <button onClick={()=>onDelete(t.id)} aria-label="Delete action point" className="text-violet-200 hover:text-rose-500 shrink-0"><Trash2 className="w-3 h-3"/></button>
+                <button onClick={()=>onDelete(t.id)} aria-label="Delete action point" className="p-1.5 -m-1.5 text-violet-200 hover:text-rose-500 shrink-0 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"><Trash2 className="w-3 h-3"/></button>
               </div>
             );
           })}
@@ -1249,11 +1249,11 @@ function MeetingRow({ meeting, actionPoints, placementByTaskId, onEditMeeting, o
             autoFocus value={text} onChange={e=>setText(e.target.value)}
             onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();submit();} if(e.key==='Escape'){e.preventDefault();setAdding(false);setText('');} }}
             placeholder="What needs doing after this?" aria-label="Action point"
-            className="flex-1 min-w-0 text-xs rounded-md border border-violet-200 px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-violet-400"/>
-          <button onClick={submit} className="text-xs text-violet-700 font-medium shrink-0">Add</button>
+            className="flex-1 min-w-0 text-xs rounded-md border border-violet-200 px-1.5 py-1 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
+          <button onClick={submit} className="text-xs text-violet-700 font-medium shrink-0 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">Add</button>
         </div>
       ) : (
-        <button onClick={()=>setAdding(true)} className="mt-1.5 flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700">
+        <button onClick={()=>setAdding(true)} className="mt-1.5 flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">
           <Plus className="w-3 h-3"/> Action point
         </button>
       )}
@@ -1263,15 +1263,15 @@ function MeetingRow({ meeting, actionPoints, placementByTaskId, onEditMeeting, o
 function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, onTogglePressing, onUnpin, slotsUnlocked, atRiskIds, draggingTaskId, onDragStartTask, onDragEndTask, dragOverKey, onDragOverSlot, onDropOnSlot, explainingKey, onToggleExplain, onEditMeeting, onDeleteMeeting, onAddActionPoint, actionPointsByMeeting, placementByTaskId }){
   const d = parseDateStr(day.date);
   return (
-    <div className={`flex flex-col h-full rounded-2xl border overflow-hidden ${isToday?'border-amber-300 bg-amber-50/50':'border-slate-200 bg-white'}`}>
-      <div className={`px-3 py-2.5 shrink-0 border-b ${isToday?'border-amber-200':'border-slate-100'}`}>
-        {weekLabel && <div className="text-xs font-semibold text-indigo-400 uppercase tracking-widest mb-1">{weekLabel}</div>}
-        <div className={`text-xs font-semibold ${isToday?'text-amber-700':'text-slate-500'}`}>{DAY_NAMES[day.dayOfWeek]}{isToday?' · Today':''}</div>
-        <div className="text-xs text-slate-400">{d.toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
+    <div className={`flex flex-col h-full rounded-2xl border backdrop-blur-md overflow-hidden shadow-prism-soft ${isToday?'border-prism-blue/40 bg-prism-blue/5':'border-white/60 bg-white/60'}`}>
+      <div className={`px-3 py-2.5 shrink-0 border-b ${isToday?'border-prism-blue/25':'border-white/50'}`}>
+        {weekLabel && <div className="text-xs font-semibold text-prism-violet uppercase tracking-widest mb-1">{weekLabel}</div>}
+        <div className={`text-xs font-semibold ${isToday?'text-prism-blue-deep':'text-prism-muted'}`}>{DAY_NAMES[day.dayOfWeek]}{isToday?' · Today':''}</div>
+        <div className="text-xs text-prism-muted/70">{d.toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
         {day.rows.length===0 ? (
-          <div className="text-xs text-slate-300 italic py-1 px-1">No flex blocks</div>
+          <div className="text-xs text-prism-muted/60 italic py-1 px-1">No flex blocks</div>
         ) : day.rows.map(row=>{
           if (row.kind==='meeting'){
             return (
@@ -1299,22 +1299,22 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
               key={inst.key}
               onDragOver={e=>{ e.preventDefault(); onDragOverSlot(inst.key); }}
               onDrop={e=>{ e.preventDefault(); onDropOnSlot(inst.slotId, inst.date); }}
-              className={`rounded-lg px-2 py-1.5 border transition-colors ${
-                isDropTarget ? 'bg-amber-50 border-amber-400 border-2' :
+              className={`rounded-xl px-2 py-1.5 border transition-colors ${
+                isDropTarget ? 'bg-prism-blue/10 border-prism-blue border-2' :
                 isUnlockedRestricted ? 'bg-rose-50/30 border-rose-200' :
                 inst.restricted ? 'bg-rose-50/70 border-rose-200 border-dashed' :
-                'bg-slate-50 border-slate-100'
+                'bg-white/40 border-white/50'
               }`}>
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-1">
-                  <span className="font-mono-plex text-xs text-slate-500">{minToLabel(inst.startMin)}</span>
+                  <span className="font-mono text-xs text-prism-muted">{minToLabel(inst.startMin)}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {isUnlockedRestricted && <span className="text-xs text-rose-500 font-medium">unlocked</span>}
                   {/* Capacity: makes wasted fragments visible — a block showing 5 of 25
                       used is obviously leaking time in a way a bare task list isn't. */}
                   <span
-                    className={`font-mono-plex text-xs ${usedMinutes===0 ? 'text-slate-300' : freeMinutes===0 ? 'text-emerald-600' : 'text-slate-400'}`}
+                    className={`font-mono text-xs ${usedMinutes===0 ? 'text-prism-muted/50' : freeMinutes===0 ? 'text-emerald-600' : 'text-prism-muted'}`}
                     title={`${usedMinutes} of ${capacityMinutes} minutes used${freeMinutes>0?` — ${freeMinutes}min still free`:' — full'}`}>
                     {usedMinutes}/{capacityMinutes}m
                   </span>
@@ -1322,7 +1322,7 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
               </div>
               <div className="space-y-2">
                 {inst.assigned.length===0 ? (
-                  <span className={`text-xs ${isDropTarget?'text-amber-600 font-medium':isUnlockedRestricted?'text-slate-300':inst.restricted?'text-rose-400':'text-slate-300'}`}>
+                  <span className={`text-xs ${isDropTarget?'text-prism-blue-deep font-medium':isUnlockedRestricted?'text-prism-muted/50':inst.restricted?'text-rose-400':'text-prism-muted/50'}`}>
                     {isDropTarget ? 'Drop here' : isUnlockedRestricted ? 'Open' : inst.restricted?'Catch-up only':'Open'}
                   </span>
                 ) : inst.assigned.map(t=>{
@@ -1347,10 +1347,10 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
                       onDragEnd={onDragEndTask}
                       className={`cursor-grab active:cursor-grabbing ${isDragging?'opacity-40':''} ${rowTint}`}>
                       <div className="flex items-start gap-1.5">
-                        <button onClick={()=>onToggleDone(t.id, t.sessionId)} className={`w-3.5 h-3.5 mt-0.5 rounded-full border shrink-0 flex items-center justify-center ${t.done?'bg-emerald-500 border-emerald-500':'border-slate-300'}`}>
-                          {t.done && <Check className="w-2.5 h-2.5 text-white"/>}
+                        <button onClick={()=>onToggleDone(t.id, t.sessionId)} aria-label={t.done?`Mark ${t.title} not done`:`Mark ${t.title} done`} className={`w-7 h-7 -mt-1 -ml-1 rounded-full border shrink-0 flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep focus-visible:ring-offset-1 ${t.done?'bg-emerald-500 border-emerald-500':'border-prism-muted/40'}`}>
+                          {t.done && <Check className="w-3.5 h-3.5 text-white"/>}
                         </button>
-                        <span className={`flex-1 min-w-0 break-words text-xs ${t.done?'line-through text-slate-400':'text-slate-700'}`}>{t.title}</span>
+                        <span className={`flex-1 min-w-0 break-words text-xs ${t.done?'line-through text-prism-muted':'text-prism-ink'}`}>{t.title}</span>
                       </div>
                       {isAtRisk && (
                         <div className="pl-5 mt-0.5">
@@ -1361,34 +1361,40 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
                       )}
                       {isExplaining && t.placementReason && (
                         <div className="pl-5 mt-1 mb-1">
-                          <div className="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 leading-relaxed">
+                          <div className="text-xs text-prism-ink bg-white/70 backdrop-blur-sm border border-white/60 rounded-lg px-2 py-1.5 leading-relaxed">
                             {t.placementReason}
                           </div>
                         </div>
                       )}
-                      <div className="flex items-center gap-1.5 mt-1 pl-5">
+                      {/* Tap targets: the visible glyphs stay small (12px) to keep five
+                          actions readable on a ~260px card, but each button's own hit
+                          area is padded up to the WCAG 2.2 AA 24x24 floor via p-1.5 —
+                          short of the 44x44 guideline this project also targets, which
+                          the current one-line dense layout can't fit without an
+                          overflow/kebab redesign. Flagged for Vera; not silently closed. */}
+                      <div className="flex items-center gap-0.5 mt-1 pl-4">
                         {t.isPartial && (
-                          <span className="font-mono-plex text-xs text-slate-400 shrink-0">{t.chunkIndex}·{t.duration}m</span>
+                          <span className="font-mono text-xs text-prism-muted shrink-0 mr-1">{t.chunkIndex}·{t.duration}m</span>
                         )}
-                        {t.dueDate && t.dueDate<day.date && <span className="text-xs text-amber-600 shrink-0">from {formatShortDate(t.dueDate)}</span>}
+                        {t.dueDate && t.dueDate<day.date && <span className="text-xs text-prism-blue-deep shrink-0 mr-1">from {formatShortDate(t.dueDate)}</span>}
                         <span className="flex-1"></span>
                         <button
                           onClick={()=>onToggleExplain(explainKey)}
                           aria-label={`Why is ${t.title} scheduled here?`}
-                          className={`shrink-0 w-3 h-3 rounded-full border text-[8px] leading-none font-bold flex items-center justify-center ${isExplaining?'bg-slate-700 border-slate-700 text-white':'border-slate-300 text-slate-400'}`}
-                          title="Why is this here?">?</button>
+                          className={`shrink-0 p-1.5 -m-0 rounded-full border text-[8px] leading-none font-bold flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${isExplaining?'bg-prism-navy border-prism-navy text-white':'border-prism-muted/40 text-prism-muted'}`}
+                          title="Why is this here?"><span className="w-3 h-3 flex items-center justify-center">?</span></button>
                         {isPinnedHere && (
-                          <button onClick={()=>onUnpin(t.id)} aria-label={`Unpin ${t.title}`} className="shrink-0" title="Pinned here manually — click to unpin and let it reschedule automatically">
-                            <Pin className="w-3 h-3 text-indigo-500" fill="currentColor"/>
+                          <button onClick={()=>onUnpin(t.id)} aria-label={`Unpin ${t.title}`} className="shrink-0 p-1.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title="Pinned here manually — click to unpin and let it reschedule automatically">
+                            <Pin className="w-3 h-3 text-prism-violet-deep" fill="currentColor"/>
                           </button>
                         )}
-                        <button onClick={()=>onEdit(t.id)} aria-label={`Edit ${t.title}`} className="text-slate-300 shrink-0 hover:text-slate-500" title={t.recurringId ? 'Edit just this occurrence' : 'Edit this task'}>
+                        <button onClick={()=>onEdit(t.id)} aria-label={`Edit ${t.title}`} className="text-prism-muted/60 shrink-0 p-1.5 rounded-full hover:text-prism-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title={t.recurringId ? 'Edit just this occurrence' : 'Edit this task'}>
                           <Pencil className="w-3 h-3"/>
                         </button>
-                        <button onClick={()=>onTogglePressing(t.id)} aria-label={t.pressing?`Unmark ${t.title} as pressing`:`Mark ${t.title} as pressing`} className="shrink-0" title="Pressing — can use catch-up blocks">
-                          <Star className={`w-3 h-3 ${t.pressing?'text-amber-500':'text-slate-300'}`} fill={t.pressing?'currentColor':'none'}/>
+                        <button onClick={()=>onTogglePressing(t.id)} aria-label={t.pressing?`Unmark ${t.title} as pressing`:`Mark ${t.title} as pressing`} className="shrink-0 p-1.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title="Pressing — can use catch-up blocks">
+                          <Star className={`w-3 h-3 ${t.pressing?'text-amber-500':'text-prism-muted/40'}`} fill={t.pressing?'currentColor':'none'}/>
                         </button>
-                        <button onClick={()=>onDelete(t.id)} aria-label={`Delete ${t.title}`} className="text-slate-300 shrink-0 hover:text-rose-500" title="Delete this task"><Trash2 className="w-3 h-3"/></button>
+                        <button onClick={()=>onDelete(t.id)} aria-label={`Delete ${t.title}`} className="text-prism-muted/60 shrink-0 p-1.5 rounded-full hover:text-rose-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title="Delete this task"><Trash2 className="w-3 h-3"/></button>
                       </div>
                     </div>
                   );
@@ -1403,18 +1409,18 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
 }
 function StatsBar({ stats }){
   const rows = [
-    { label:'Today', value: stats.day, color:'text-amber-700' },
-    { label:'This week', value: stats.week, color:'text-indigo-700' },
+    { label:'Today', value: stats.day, color:'text-prism-blue-deep' },
+    { label:'This week', value: stats.week, color:'text-prism-violet-deep' },
     { label:'This month', value: stats.month, color:'text-violet-700' },
     { label:'This year', value: stats.year, color:'text-emerald-700' },
   ];
   return (
     <div className="flex items-center gap-5">
-      <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest shrink-0">Completed</span>
+      <span className="text-xs font-semibold text-prism-muted uppercase tracking-widest shrink-0">Completed</span>
       {rows.map(r=>(
         <div key={r.label} className="flex items-baseline gap-1.5 shrink-0">
-          <span className={`font-mono-plex text-lg font-semibold ${r.color}`}>{r.value}</span>
-          <span className="text-xs text-slate-400">{r.label}</span>
+          <span className={`font-mono text-lg font-semibold ${r.color}`}>{r.value}</span>
+          <span className="text-xs text-prism-muted">{r.label}</span>
         </div>
       ))}
     </div>
@@ -1480,38 +1486,38 @@ function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, 
     if (e.key === 'Escape'){ e.preventDefault(); onClose(); }
   }
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+    <div className="rounded-2xl border border-white/60 bg-white/70 backdrop-blur-xl shadow-prism-soft p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-slate-900">{isEditing ? (isRecurringInstance ? 'Edit this occurrence' : 'Edit task') : 'Add a task'}</span>
-        <button type="button" onClick={onClose} aria-label="Close form" className="text-slate-400"><X className="w-4 h-4"/></button>
+        <span className="text-sm font-semibold text-prism-ink">{isEditing ? (isRecurringInstance ? 'Edit this occurrence' : 'Edit task') : 'Add a task'}</span>
+        <button type="button" onClick={onClose} aria-label="Close form" className="text-prism-muted hover:text-prism-ink p-1.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"><X className="w-4 h-4"/></button>
       </div>
       {isRecurringInstance && (
         <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1.5">
           This changes only this one occurrence. The repeating task itself stays as it is — edit that under Time slots &amp; recurring tasks.
         </div>
       )}
-      <input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={handleTitleKeyDown} placeholder="What needs doing?" aria-label="Task title" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
+      <input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={handleTitleKeyDown} placeholder="What needs doing?" aria-label="Task title" className="w-full rounded-xl border border-white/60 bg-white/80 px-3 py-2.5 text-sm text-prism-ink placeholder:text-prism-muted focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
       <div>
-        <label className="text-xs text-slate-400 block mb-1">How long?</label>
+        <label className="text-xs text-prism-muted block mb-1">How long?</label>
         <div className="flex flex-wrap gap-1.5">
           {DURATION_PRESETS.map(p=>(
             <button key={p.minutes} type="button" onClick={()=>{ setDuration(p.minutes); setCustomDuration(false); }}
-              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${!customDuration && duration===p.minutes ? 'bg-slate-900 text-white border-slate-900' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>
+              className={`min-h-[36px] text-xs px-2.5 py-1.5 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${!customDuration && duration===p.minutes ? 'bg-prism-cta text-white border-transparent' : 'border-white/60 bg-white/50 text-prism-muted hover:border-prism-blue/50'}`}>
               {p.label}
             </button>
           ))}
           <button type="button" onClick={()=>setCustomDuration(true)}
-            className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${customDuration ? 'bg-slate-900 text-white border-slate-900' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>
+            className={`min-h-[36px] text-xs px-2.5 py-1.5 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${customDuration ? 'bg-prism-cta text-white border-transparent' : 'border-white/60 bg-white/50 text-prism-muted hover:border-prism-blue/50'}`}>
             Other
           </button>
         </div>
         {customDuration && (
           <input type="number" min={MIN_TASK_MINUTES} step="5" value={duration} onChange={e=>setDuration(e.target.value)}
             placeholder="minutes" aria-label="Custom duration in minutes"
-            className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
+            className="mt-1.5 w-full rounded-xl border border-white/60 bg-white/80 px-3 py-2 text-sm text-prism-ink focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
         )}
         {showAdjustment && (
-          <div className="mt-1.5 text-xs text-indigo-800 bg-indigo-50 border border-indigo-200 rounded-lg px-2 py-1.5">
+          <div className="mt-1.5 text-xs text-prism-violet-deep bg-prism-violet/10 border border-prism-violet/25 rounded-lg px-2 py-1.5">
             <div>
               Across your last {accuracy.count} timed tasks you've run{' '}
               <span className="font-semibold">
@@ -1522,7 +1528,7 @@ function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, 
               your estimates — so this may really take about {formatDurationHM(adjustedMins)}.
             </div>
             <button type="button" onClick={()=>{ setDuration(adjustedMins); setCustomDuration(!DURATION_PRESETS.some(p=>p.minutes===adjustedMins)); }}
-              className="mt-1.5 text-xs bg-indigo-600 text-white rounded-lg px-2 py-1 font-medium">
+              className="mt-1.5 min-h-[32px] text-xs bg-prism-violet-deep text-white rounded-lg px-2 py-1 font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">
               Use {formatDurationHM(adjustedMins)} instead
             </button>
           </div>
@@ -1532,20 +1538,20 @@ function TaskForm({ onSubmit, onClose, existingTask=null, largestSlotMinutes=0, 
             {formatDurationHM(mins)} is more than your entire week of flex time ({formatDurationHM(totalWeeklyMinutes)}). This will spill across several weeks — consider breaking it into smaller tasks.
           </div>
         ) : willSplit ? (
-          <div className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+          <div className="mt-1.5 text-xs text-prism-blue-deep bg-prism-blue/10 border border-prism-blue/25 rounded-lg px-2 py-1.5">
             Your largest block is {formatDurationHM(largestSlotMinutes)}, so this will be split across several sittings.
           </div>
         ) : null}
       </div>
       <div>
-        <label className="text-xs text-slate-400 block mb-1">Due by (optional)</label>
-        <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} aria-label="Due date" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"/>
+        <label className="text-xs text-prism-muted block mb-1">Due by (optional)</label>
+        <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} aria-label="Due date" className="w-full rounded-xl border border-white/60 bg-white/80 px-3 py-2 text-sm text-prism-ink focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
       </div>
-      <label className="flex items-start gap-2 text-xs text-slate-600">
-        <input type="checkbox" checked={pressing} onChange={e=>setPressing(e.target.checked)} className="mt-0.5"/>
+      <label className="flex items-start gap-2 text-xs text-prism-ink">
+        <input type="checkbox" checked={pressing} onChange={e=>setPressing(e.target.checked)} className="mt-0.5 accent-prism-blue-deep w-4 h-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"/>
         <span>Pressing / specially requested — eligible for catch-up-only blocks (Tue eve, Sat morning)</span>
       </label>
-      <button type="button" onClick={submit} className="w-full py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium">{isEditing ? 'Save changes' : 'Add task'}</button>
+      <button type="button" onClick={submit} className="w-full py-2.5 rounded-xl bg-prism-cta text-white text-sm font-medium shadow-prism-cta transition-transform hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep focus-visible:ring-offset-2">{isEditing ? 'Save changes' : 'Add task'}</button>
     </div>
   );
 }
@@ -1578,27 +1584,27 @@ function MeetingForm({ onSubmit, onClose, existingMeeting=null, todayStr }){
     if (e.key === 'Escape'){ e.preventDefault(); onClose(); }
   }
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+    <div className="rounded-2xl border border-white/60 bg-white/70 backdrop-blur-xl shadow-prism-soft p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-slate-900">{isEditing ? 'Edit meeting' : 'Add a meeting'}</span>
-        <button type="button" onClick={onClose} aria-label="Close form" className="text-slate-400"><X className="w-4 h-4"/></button>
+        <span className="text-sm font-semibold text-prism-ink">{isEditing ? 'Edit meeting' : 'Add a meeting'}</span>
+        <button type="button" onClick={onClose} aria-label="Close form" className="text-prism-muted hover:text-prism-ink p-1.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"><X className="w-4 h-4"/></button>
       </div>
-      <input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={handleTitleKeyDown} placeholder="What's the meeting?" aria-label="Meeting title" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
+      <input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={handleTitleKeyDown} placeholder="What's the meeting?" aria-label="Meeting title" className="w-full rounded-xl border border-white/60 bg-white/80 px-3 py-2.5 text-sm text-prism-ink placeholder:text-prism-muted focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
       <div>
-        <label className="text-xs text-slate-400 block mb-1">When?</label>
-        <input type="date" value={date} min={todayStr} onChange={e=>setDate(e.target.value)} aria-label="Meeting date" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
+        <label className="text-xs text-prism-muted block mb-1">When?</label>
+        <input type="date" value={date} min={todayStr} onChange={e=>setDate(e.target.value)} aria-label="Meeting date" className="w-full rounded-xl border border-white/60 bg-white/80 px-3 py-2 text-sm text-prism-ink focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
       </div>
       <div className="flex items-end gap-2">
         <div className="flex-1">
-          <label className="text-xs text-slate-400 block mb-1">From</label>
-          <input type="time" value={start} onChange={e=>setStart(e.target.value)} aria-label="Start time" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
+          <label className="text-xs text-prism-muted block mb-1">From</label>
+          <input type="time" value={start} onChange={e=>setStart(e.target.value)} aria-label="Start time" className="w-full rounded-xl border border-white/60 bg-white/80 px-3 py-2 text-sm text-prism-ink focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
         </div>
         <div className="flex-1">
-          <label className="text-xs text-slate-400 block mb-1">To</label>
-          <input type="time" value={end} onChange={e=>setEnd(e.target.value)} aria-label="End time" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
+          <label className="text-xs text-prism-muted block mb-1">To</label>
+          <input type="time" value={end} onChange={e=>setEnd(e.target.value)} aria-label="End time" className="w-full rounded-xl border border-white/60 bg-white/80 px-3 py-2 text-sm text-prism-ink focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
         </div>
         {durationMins!=null && (
-          <span className="text-xs text-slate-400 font-mono-plex pb-2.5 shrink-0">{formatDurationHM(durationMins)}</span>
+          <span className="text-xs text-prism-muted font-mono pb-2.5 shrink-0">{formatDurationHM(durationMins)}</span>
         )}
       </div>
       {badRange && (
@@ -1606,8 +1612,8 @@ function MeetingForm({ onSubmit, onClose, existingMeeting=null, todayStr }){
           The finish time needs to be after the start time.
         </div>
       )}
-      <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Notes (optional)" aria-label="Meeting notes" rows={2} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"/>
-      <button type="button" onClick={submit} disabled={!canSubmit} className="w-full py-2.5 rounded-xl bg-violet-700 text-white text-sm font-medium disabled:opacity-40">{isEditing ? 'Save changes' : 'Add meeting'}</button>
+      <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Notes (optional)" aria-label="Meeting notes" rows={2} className="w-full rounded-xl border border-white/60 bg-white/80 px-3 py-2 text-sm text-prism-ink focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
+      <button type="button" onClick={submit} disabled={!canSubmit} className="w-full py-2.5 rounded-xl bg-prism-violet-deep text-white text-sm font-medium disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep focus-visible:ring-offset-2">{isEditing ? 'Save changes' : 'Add meeting'}</button>
     </div>
   );
 }
@@ -1778,11 +1784,11 @@ function CompletedPanel({ records }){
             const over = act!=null && est>0 ? act/est : null;
             return (
               <div key={r.id+'|'+r.doneAt} className="flex items-baseline gap-2 text-xs border-b border-slate-100 pb-1">
-                <span className="font-mono-plex text-slate-400 shrink-0 w-14">{formatShortDate(toDateStr(new Date(r.doneAt)))}</span>
+                <span className="font-mono text-slate-400 shrink-0 w-14">{formatShortDate(toDateStr(new Date(r.doneAt)))}</span>
                 <span className={`flex-1 min-w-0 truncate ${r.recurringId?'text-emerald-700':'text-slate-700'}`}>{r.title}</span>
-                <span className="font-mono-plex text-slate-400 shrink-0">{formatDurationHM(est)}</span>
+                <span className="font-mono text-slate-400 shrink-0">{formatDurationHM(est)}</span>
                 {act!=null && (
-                  <span className={`font-mono-plex shrink-0 ${over>1.15?'text-amber-600':over<0.85?'text-indigo-600':'text-emerald-600'}`}>
+                  <span className={`font-mono shrink-0 ${over>1.15?'text-amber-600':over<0.85?'text-indigo-600':'text-emerald-600'}`}>
                     actual {formatDurationHM(act)}
                   </span>
                 )}
@@ -1809,7 +1815,7 @@ function TrendsPanel({ weeklySnapshots, weeklyVolume, accuracy }){
             {weekKeys.map(wk=>(
               <div key={wk} className="flex flex-col items-center gap-1" title={`Week of ${formatShortDate(wk)}: ${weeklySnapshots[wk].level}`}>
                 <span className={`w-3.5 h-3.5 rounded-full ${dotColor[weeklySnapshots[wk].level]}`}></span>
-                <span className="text-xs text-slate-300 font-mono-plex">{formatShortDate(wk)}</span>
+                <span className="text-xs text-slate-300 font-mono">{formatShortDate(wk)}</span>
               </div>
             ))}
           </div>
@@ -1821,8 +1827,8 @@ function TrendsPanel({ weeklySnapshots, weeklyVolume, accuracy }){
           <div className="text-xs text-slate-400">Log actual time on a few completed tasks (via the completion prompt) to see this.</div>
         ) : (
           <div className="text-sm text-slate-600">
-            Based on <span className="font-mono-plex font-semibold text-slate-900">{accuracy.count}</span> task{accuracy.count>1?'s':''} with logged time, you're averaging{' '}
-            <span className={`font-mono-plex font-semibold ${accuracy.ratio>1.15?'text-amber-600':accuracy.ratio<0.85?'text-indigo-600':'text-emerald-600'}`}>
+            Based on <span className="font-mono font-semibold text-slate-900">{accuracy.count}</span> task{accuracy.count>1?'s':''} with logged time, you're averaging{' '}
+            <span className={`font-mono font-semibold ${accuracy.ratio>1.15?'text-amber-600':accuracy.ratio<0.85?'text-indigo-600':'text-emerald-600'}`}>
               {accuracy.ratio>=1 ? `${Math.round((accuracy.ratio-1)*100)}% longer` : `${Math.round((1-accuracy.ratio)*100)}% shorter`}
             </span>{' '}than estimated.
           </div>
@@ -1838,7 +1844,7 @@ function TrendsPanel({ weeklySnapshots, weeklyVolume, accuracy }){
               const heightPct = w.count===0 ? 4 : Math.max(10, Math.round((w.count/maxVolume)*100));
               return (
                 <div key={w.weekStart} className="flex flex-col items-center justify-end gap-1 h-full">
-                  <span className="text-xs text-slate-400 font-mono-plex">{w.count}</span>
+                  <span className="text-xs text-slate-400 font-mono">{w.count}</span>
                   <div className="w-4 bg-violet-300 rounded-t" style={{ height: `${heightPct}%` }}></div>
                 </div>
               );
@@ -2322,39 +2328,35 @@ export default function WeekPlanner(){
   }
   if (!loaded){
     return (
-      <div className="h-screen w-full flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-amber-50">
-        <Loader2 className="w-6 h-6 text-slate-300 animate-spin"/>
+      <div className="h-screen w-full flex items-center justify-center bg-prism-base">
+        <Loader2 className="w-6 h-6 text-prism-muted animate-spin"/>
       </div>
     );
   }
   return (
-    <div className="week-planner-root h-full w-full overflow-hidden bg-gradient-to-br from-slate-50 via-white to-amber-50 text-slate-800 flex flex-col">
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
-        .font-mono-plex { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
-        .week-planner-root, .week-planner-root * { font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif; }
-        .week-planner-root .font-mono-plex { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
-        @keyframes flapIn { 0% { opacity:0; transform:rotateX(-90deg);} 60% { opacity:1; } 100% { opacity:1; transform:rotateX(0deg);} }
-        .flap { animation: flapIn 0.45s ease-out; transform-origin:top center; }
-        @keyframes toastIn { 0% { opacity:0; transform:translateY(14px) scale(0.97);} 100% { opacity:1; transform:translateY(0) scale(1);} }
-        .toast-pop { animation: toastIn 0.3s cubic-bezier(0.34,1.56,0.64,1); }
-        @media (prefers-reduced-motion: reduce){ .flap, .toast-pop { animation:none; } }
-        .planner-shell { display:grid; grid-template-columns: 340px 1fr; gap:1.25rem; min-height:0; }
-        @media (max-width: 900px){ .planner-shell { grid-template-columns: 1fr; overflow-y:auto; } }
-      `}</style>
-      <header className="flex items-center justify-between px-6 py-4 border-b border-slate-200/70 bg-white/70 backdrop-blur-sm shrink-0">
+    <div className="week-planner-root relative h-full w-full overflow-hidden bg-prism-base text-prism-ink flex flex-col isolate">
+      {/* Ambient background blobs — decorative only, sit behind every real
+          surface so the glass cards above have something to show through.
+          Static gradients, not animated, so there's nothing here that
+          prefers-reduced-motion needs to suppress. */}
+      <div aria-hidden="true" className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+        <div className="absolute -top-44 -left-40 w-[620px] h-[620px] rounded-full bg-prism-blob-blue blur-prism-blob opacity-55"/>
+        <div className="absolute -bottom-56 -right-44 w-[680px] h-[680px] rounded-full bg-prism-blob-violet blur-prism-blob opacity-45"/>
+        <div className="absolute top-[40%] left-[55%] w-[420px] h-[420px] rounded-full bg-prism-blob-navy blur-prism-blob opacity-[0.14]"/>
+      </div>
+      <header className="relative z-10 flex items-center justify-between px-6 py-4 border-b border-white/60 bg-white/55 backdrop-blur-xl backdrop-saturate-150 shrink-0">
         <div>
-          <Eyebrow className="text-amber-600">Week Planner</Eyebrow>
-          <div className="text-2xl font-semibold text-slate-900">{DAY_NAMES[now.getDay()]}, {now.toLocaleDateString('en-AU',{day:'numeric',month:'long'})}</div>
+          <Eyebrow className="text-prism-blue-deep">Week Planner</Eyebrow>
+          <div className="text-2xl font-display font-semibold text-prism-ink">{DAY_NAMES[now.getDay()]}, {now.toLocaleDateString('en-AU',{day:'numeric',month:'long'})}</div>
         </div>
         <div className="flex items-center gap-4">
           <SyncBadge status={syncStatus}/>
           <WorkloadIndicator workload={workload}/>
-          <div className="font-mono-plex text-3xl text-slate-300 tabular-nums">{minToLabel(nowMin)}</div>
-          <button onClick={signOut} className="text-xs text-slate-400 hover:text-slate-600 shrink-0">Sign out</button>
+          <div className="font-mono text-3xl text-prism-muted/70 tabular-nums">{minToLabel(nowMin)}</div>
+          <button onClick={signOut} className="text-xs text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">Sign out</button>
         </div>
       </header>
-      <div className="planner-shell flex-1 p-5 overflow-hidden">
+      <div className="relative z-10 grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 flex-1 p-4 sm:p-5 overflow-y-auto lg:overflow-hidden min-h-0">
         <div className="flex flex-col gap-4 overflow-y-auto min-h-0 pr-1">
           <HeroCard currentInst={currentInst} nextInst={nextInst} onToggleDone={toggleDone} slotsUnlocked={slotsUnlocked} atRiskIds={dueDateRisk.atRiskIds}/>
           <div>
@@ -2369,9 +2371,9 @@ export default function WeekPlanner(){
                 accuracy={accuracy}
               />
             ) : !showAdd ? (
-              <button onClick={()=>setShowAdd(true)} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-slate-900 text-white font-semibold text-sm hover:bg-slate-800 transition-colors">
+              <button onClick={()=>setShowAdd(true)} className="w-full min-h-[44px] flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-prism-cta text-white font-semibold text-sm shadow-prism-cta transition-transform hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep focus-visible:ring-offset-2">
                 <Plus className="w-5 h-5"/> New task
-                <kbd className="ml-1 text-xs font-mono-plex bg-slate-700 rounded px-1.5 py-0.5 font-normal">n</kbd>
+                <kbd className="ml-1 text-xs font-mono bg-white/15 rounded px-1.5 py-0.5 font-normal">n</kbd>
               </button>
             ) : (
               <TaskForm
@@ -2393,7 +2395,7 @@ export default function WeekPlanner(){
                 todayStr={todayStr}
               />
             ) : !showAddMeeting ? (
-              <button onClick={()=>{ setShowAddMeeting(true); setEditingMeetingId(null); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border border-violet-200 bg-white text-violet-700 font-semibold text-sm hover:bg-violet-50 transition-colors">
+              <button onClick={()=>{ setShowAddMeeting(true); setEditingMeetingId(null); }} className="w-full min-h-[44px] flex items-center justify-center gap-2 py-3 rounded-2xl border border-prism-violet/30 bg-white/60 backdrop-blur-md text-violet-700 font-semibold text-sm hover:bg-prism-violet/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">
                 <CalendarPlus className="w-4 h-4"/> New meeting
               </button>
             ) : (
@@ -2407,13 +2409,13 @@ export default function WeekPlanner(){
         </div>
         <div className="flex flex-col overflow-hidden min-h-0">
           <div className="flex items-center justify-between mb-3 shrink-0">
-            <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-widest">Upcoming</h2>
+            <h2 className="text-sm font-semibold text-prism-ink uppercase tracking-widest">Upcoming</h2>
             <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1.5 text-xs text-slate-400">
+              <span className="flex items-center gap-1.5 text-xs text-prism-muted">
                 <span className="w-2.5 h-2.5 rounded bg-emerald-100 border border-emerald-300 shrink-0"></span>
                 recurring
               </span>
-              {laterCount>0 && <span className="text-xs text-slate-400">+{laterCount} scheduled beyond next week</span>}
+              {laterCount>0 && <span className="text-xs text-prism-muted">+{laterCount} scheduled beyond next week</span>}
             </div>
           </div>
           {overflowByTask.length>0 && (
@@ -2425,7 +2427,7 @@ export default function WeekPlanner(){
                 {overflowByTask.map(o=>(
                   <li key={o.id} className="flex items-baseline gap-1.5">
                     <span className="truncate">{o.title}</span>
-                    <span className="font-mono-plex text-amber-700 shrink-0">
+                    <span className="font-mono text-amber-700 shrink-0">
                       {formatDurationHM(o.unplacedMinutes)} unplaced{o.unplacedMinutes<o.duration ? ` of ${formatDurationHM(o.duration)}` : ''}
                     </span>
                     {o.dueDate && <span className="text-amber-600 shrink-0">· due {formatShortDate(o.dueDate)}</span>}
@@ -2440,10 +2442,10 @@ export default function WeekPlanner(){
             </div>
           )}
           {pinnedCount>0 && (
-            <div className="mb-3 text-xs text-indigo-800 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2 shrink-0 flex items-center gap-2">
+            <div className="mb-3 text-xs text-prism-violet-deep bg-prism-violet/10 border border-prism-violet/25 rounded-xl px-3 py-2 shrink-0 flex items-center gap-2">
               <Pin className="w-3.5 h-3.5 shrink-0" fill="currentColor"/>
               <span className="flex-1">{pinnedCount} task{pinnedCount>1?'s are':' is'} manually pinned and won't be moved by the scheduler.</span>
-              <button onClick={clearAllPins} className="shrink-0 underline font-medium">Clear all pins</button>
+              <button onClick={clearAllPins} className="shrink-0 underline font-medium rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">Clear all pins</button>
             </div>
           )}
           {backlogCount>0 && (
@@ -2452,7 +2454,7 @@ export default function WeekPlanner(){
                 {backlogCount} repeating task{backlogCount>1?'s have':' has'} rolled over unfinished and {backlogCount>1?'are':'is'} still competing for your slots.
                 {' '}Old housekeeping work rarely needs doing — clear it, or set those tasks to auto-expire in settings.
               </span>
-              <button onClick={clearBacklog} className="shrink-0 underline font-medium">Clear {backlogCount}</button>
+              <button onClick={clearBacklog} className="shrink-0 underline font-medium rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">Clear {backlogCount}</button>
             </div>
           )}
           {allPlaced && (
@@ -2472,35 +2474,35 @@ export default function WeekPlanner(){
           </div>
         </div>
       </div>
-      <div className="shrink-0 border-t border-slate-200 bg-white/90 backdrop-blur-sm">
-        <div className="flex items-center gap-6 px-6 py-3">
+      <div className="relative z-10 shrink-0 border-t border-white/60 bg-white/70 backdrop-blur-xl backdrop-saturate-150">
+        <div className="flex items-center gap-6 px-6 py-3 flex-wrap">
           <StatsBar stats={stats}/>
           <div className="flex-1"></div>
-          <button onClick={()=>setOpenDrawer(d=>d==='completed'?null:'completed')} className="flex items-center gap-2 text-sm font-medium text-slate-500 shrink-0">
+          <button onClick={()=>setOpenDrawer(d=>d==='completed'?null:'completed')} className="flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">
             Completed
             {openDrawer==='completed' ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
           </button>
-          <button onClick={()=>setOpenDrawer(d=>d==='trends'?null:'trends')} className="flex items-center gap-2 text-sm font-medium text-slate-500 shrink-0">
+          <button onClick={()=>setOpenDrawer(d=>d==='trends'?null:'trends')} className="flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">
             Term trends
             {openDrawer==='trends' ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
           </button>
-          <button onClick={()=>setOpenDrawer(d=>d==='settings'?null:'settings')} className="flex items-center gap-2 text-sm font-medium text-slate-500 shrink-0">
+          <button onClick={()=>setOpenDrawer(d=>d==='settings'?null:'settings')} className="flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">
             <Settings2 className="w-4 h-4"/> Time slots & recurring tasks
             {openDrawer==='settings' ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
           </button>
         </div>
         {openDrawer==='completed' && (
-          <div className="max-h-80 overflow-y-auto border-t border-slate-100 px-6 py-4">
+          <div className="max-h-80 overflow-y-auto border-t border-white/50 px-6 py-4">
             <CompletedPanel records={records}/>
           </div>
         )}
         {openDrawer==='trends' && (
-          <div className="max-h-80 overflow-y-auto border-t border-slate-100 px-6 py-4">
+          <div className="max-h-80 overflow-y-auto border-t border-white/50 px-6 py-4">
             <TrendsPanel weeklySnapshots={weeklySnapshots} weeklyVolume={weeklyVolume} accuracy={accuracy}/>
           </div>
         )}
         {openDrawer==='settings' && (
-          <div className="max-h-80 overflow-y-auto border-t border-slate-100 px-6 py-4">
+          <div className="max-h-80 overflow-y-auto border-t border-white/50 px-6 py-4">
             <SettingsPanel
               slots={slots} setSlots={setSlots}
               recDaily={recDaily} setRecDaily={setRecDaily}
@@ -2520,28 +2522,28 @@ export default function WeekPlanner(){
         )}
       </div>
       {toast && (
-        <div key={toast.id} className="toast-pop fixed bottom-6 right-6 z-50 bg-slate-900 text-white rounded-2xl shadow-2xl px-5 py-4 max-w-xs">
+        <div key={toast.id} className="animate-prism-toast motion-reduce:animate-none fixed bottom-6 right-6 z-50 bg-prism-navy text-white rounded-2xl shadow-prism-card px-5 py-4 max-w-xs">
           <div className="flex items-center gap-3">
             <PartyPopper className="w-5 h-5 text-amber-400 shrink-0"/>
             <span className="text-sm font-medium">{toast.message}</span>
           </div>
           {toast.askTime && (
-            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-700">
-              <span className="text-xs text-slate-400 shrink-0">Actual time?</span>
-              <input type="number" min="1" placeholder="min" value={timeInput} onChange={e=>setTimeInput(e.target.value)} className="w-16 text-xs rounded-lg bg-slate-800 border border-slate-700 px-2 py-1 text-white focus:outline-none focus:ring-1 focus:ring-amber-400"/>
-              <button onClick={saveActualTime} className="text-xs bg-amber-400 text-slate-900 rounded-lg px-2.5 py-1 font-medium shrink-0">Save</button>
-              <button onClick={dismissTimePrompt} className="text-xs text-slate-400 shrink-0">Skip</button>
+            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-white/15">
+              <label htmlFor="toast-actual-minutes" className="text-xs text-white/60 shrink-0">Actual time?</label>
+              <input id="toast-actual-minutes" type="number" min="1" placeholder="min" value={timeInput} onChange={e=>setTimeInput(e.target.value)} className="w-16 text-xs rounded-lg bg-white/10 border border-white/20 px-2 py-1 text-white focus:outline-none focus:ring-2 focus:ring-prism-blue"/>
+              <button onClick={saveActualTime} className="text-xs bg-prism-blue text-prism-ink rounded-lg px-2.5 py-1.5 font-semibold shrink-0 min-h-[32px]">Save</button>
+              <button onClick={dismissTimePrompt} className="text-xs text-white/60 hover:text-white shrink-0">Skip</button>
             </div>
           )}
         </div>
       )}
       {pendingUndo && (
-        <div className="toast-pop fixed bottom-6 left-6 z-50 bg-slate-900 text-white rounded-2xl shadow-2xl px-5 py-3 flex items-center gap-3">
-          <Trash2 className="w-4 h-4 text-slate-400 shrink-0"/>
+        <div className="animate-prism-toast motion-reduce:animate-none fixed bottom-6 left-6 z-50 bg-prism-navy text-white rounded-2xl shadow-prism-card px-5 py-3 flex items-center gap-3">
+          <Trash2 className="w-4 h-4 text-white/50 shrink-0"/>
           <span className="text-sm">
             Deleted <span className="font-medium">{pendingUndo.task.title}</span>
           </span>
-          <button onClick={undoDelete} className="flex items-center gap-1 text-xs bg-amber-400 text-slate-900 rounded-lg px-2.5 py-1.5 font-medium shrink-0">
+          <button onClick={undoDelete} className="flex items-center gap-1 text-xs bg-prism-blue text-prism-ink rounded-lg px-2.5 py-1.5 font-semibold shrink-0">
             <Undo2 className="w-3 h-3"/> Undo
           </button>
         </div>

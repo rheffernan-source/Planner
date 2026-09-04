@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2, Users, CalendarPlus } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2, Users, CalendarPlus, MoreVertical, HelpCircle } from 'lucide-react';
 import { useAuth, useCloudTasks, useCloudDoc, importFromThisBrowser } from './cloudSync';
 import { SyncBadge } from './AuthGate';
 import CaptureThought from './CaptureThought';
@@ -1260,6 +1261,139 @@ function MeetingRow({ meeting, actionPoints, placementByTaskId, onEditMeeting, o
     </div>
   );
 }
+/*
+  Overflow menu for the less-frequently-used task-row actions ("why is this
+  here?", pressing, unpin). Edit and Delete stay inline in the row at a real
+  44x44 target each — they're the actions used on every task, every day.
+  This menu holds the rest at the same 44x44 floor without eating card width.
+
+  Portal-rendered to document.body and positioned from the trigger's
+  getBoundingClientRect(), rather than a plain `absolute` child of the task
+  row: the row lives inside DayColumn's `overflow-y-auto` list, and a menu
+  tall enough to hold three 44px items would get silently clipped by that
+  scroll container if it were positioned relative to the row instead of the
+  viewport. Closes on Escape (focus returns to the trigger, matching
+  CaptureThought's pattern), on an outside click, and on scroll anywhere in
+  the capture phase — covers the day column scrolling, not just window
+  scroll, since inner-element scroll events don't bubble.
+*/
+function TaskActionsMenu({ taskTitle, isExplaining, onToggleExplain, isPinnedHere, onUnpin, pressing, onTogglePressing }){
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null); // { top, left, openUpward }
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+
+  function place(){
+    const btn = triggerRef.current;
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const menuHeight = 3 * 44 + 8; // worst case: explain + pressing + unpin, plus py-1 padding
+    const openUpward = r.bottom + menuHeight > window.innerHeight;
+    setPos({
+      left: Math.min(r.right - 190, window.innerWidth - 198),
+      top: openUpward ? r.top - menuHeight : r.bottom + 4,
+      openUpward,
+    });
+  }
+
+  function openMenu(){
+    place();
+    setOpen(true);
+  }
+  function closeMenu(returnFocus){
+    setOpen(false);
+    if (returnFocus) triggerRef.current?.focus();
+  }
+
+  useEffect(()=>{
+    if (!open) return;
+    function onDocMouseDown(e){
+      if (menuRef.current?.contains(e.target) || triggerRef.current?.contains(e.target)) return;
+      closeMenu(false);
+    }
+    function onKeyDown(e){
+      if (e.key === 'Escape'){ e.preventDefault(); closeMenu(true); }
+    }
+    function onScroll(){ closeMenu(false); }
+    document.addEventListener('mousedown', onDocMouseDown);
+    window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    const first = menuRef.current?.querySelector('[role="menuitem"]');
+    first?.focus();
+    return ()=>{
+      document.removeEventListener('mousedown', onDocMouseDown);
+      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[open]);
+
+  function onMenuKeyDown(e){
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const items = Array.from(menuRef.current?.querySelectorAll('[role="menuitem"]') || []);
+    if (items.length === 0) return;
+    e.preventDefault();
+    const idx = items.indexOf(document.activeElement);
+    const next = e.key === 'ArrowDown' ? (idx+1+items.length)%items.length : (idx-1+items.length)%items.length;
+    items[next]?.focus();
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={()=> open ? closeMenu(false) : openMenu()}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`More actions for ${taskTitle}`}
+        className="w-11 h-11 shrink-0 flex items-center justify-center rounded-full text-prism-muted/60 hover:text-prism-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"
+      >
+        <MoreVertical className="w-3.5 h-3.5"/>
+      </button>
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label={`Actions for ${taskTitle}`}
+          onKeyDown={onMenuKeyDown}
+          style={{ position:'fixed', top:pos.top, left:pos.left }}
+          className="z-50 w-[190px] rounded-xl border border-white/60 bg-white/95 backdrop-blur-xl backdrop-saturate-150 shadow-prism-card py-1"
+        >
+          <button
+            role="menuitem"
+            tabIndex={-1}
+            onClick={()=>{ onToggleExplain(); closeMenu(false); }}
+            className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 text-sm text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-prism-blue-deep ${isExplaining ? 'bg-prism-blue/10 text-prism-blue-deep' : 'text-prism-ink hover:bg-prism-blue/5'}`}
+          >
+            <HelpCircle className="w-4 h-4 shrink-0"/> Why is this here?
+          </button>
+          <button
+            role="menuitem"
+            tabIndex={-1}
+            onClick={()=>{ onTogglePressing(); closeMenu(false); }}
+            className="w-full min-h-[44px] flex items-center gap-2.5 px-3 text-sm text-left text-prism-ink hover:bg-prism-blue/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-prism-blue-deep"
+          >
+            <Star className={`w-4 h-4 shrink-0 ${pressing ? 'text-amber-500' : 'text-prism-muted/50'}`} fill={pressing ? 'currentColor' : 'none'}/> {pressing ? 'Unmark as pressing' : 'Mark as pressing'}
+          </button>
+          {isPinnedHere && (
+            <button
+              role="menuitem"
+              tabIndex={-1}
+              onClick={()=>{ onUnpin(); closeMenu(false); }}
+              className="w-full min-h-[44px] flex items-center gap-2.5 px-3 text-sm text-left text-prism-violet-deep hover:bg-prism-violet/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-prism-blue-deep"
+            >
+              <Pin className="w-4 h-4 shrink-0" fill="currentColor"/> Unpin — let it reschedule
+            </button>
+          )}
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
 function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, onTogglePressing, onUnpin, slotsUnlocked, atRiskIds, draggingTaskId, onDragStartTask, onDragEndTask, dragOverKey, onDragOverSlot, onDropOnSlot, explainingKey, onToggleExplain, onEditMeeting, onDeleteMeeting, onAddActionPoint, actionPointsByMeeting, placementByTaskId }){
   const d = parseDateStr(day.date);
   return (
@@ -1351,6 +1485,11 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
                           {t.done && <Check className="w-3.5 h-3.5 text-white"/>}
                         </button>
                         <span className={`flex-1 min-w-0 break-words text-xs ${t.done?'line-through text-prism-muted':'text-prism-ink'}`}>{t.title}</span>
+                        {/* Decorative status glyphs — the interactive toggles for both
+                            live in the overflow menu now; these just keep pinned/pressing
+                            scannable at a glance without needing to open it. */}
+                        {isPinnedHere && <Pin aria-hidden="true" title="Pinned here manually" className="w-3 h-3 shrink-0 mt-0.5 text-prism-violet-deep" fill="currentColor"/>}
+                        {t.pressing && <Star aria-hidden="true" title="Pressing" className="w-3 h-3 shrink-0 mt-0.5 text-amber-500" fill="currentColor"/>}
                       </div>
                       {isAtRisk && (
                         <div className="pl-5 mt-0.5">
@@ -1366,35 +1505,31 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
                           </div>
                         </div>
                       )}
-                      {/* Tap targets: the visible glyphs stay small (12px) to keep five
-                          actions readable on a ~260px card, but each button's own hit
-                          area is padded up to the WCAG 2.2 AA 24x24 floor via p-1.5 —
-                          short of the 44x44 guideline this project also targets, which
-                          the current one-line dense layout can't fit without an
-                          overflow/kebab redesign. Flagged for Vera; not silently closed. */}
-                      <div className="flex items-center gap-0.5 mt-1 pl-4">
+                      {/* Tap targets: Edit and Delete — the two actions used on every
+                          task — get a real 44x44 hit area each (w-11 h-11, icon centred).
+                          "Why is this here?", pressing and unpin move into the
+                          TaskActionsMenu overflow button (also 44x44), which is where
+                          they get their own full-size targets instead of a 24x24
+                          compromise. See TaskActionsMenu above DayColumn. */}
+                      <div className="flex items-center gap-1 mt-1 pl-4">
                         {t.isPartial && (
                           <span className="font-mono text-xs text-prism-muted shrink-0 mr-1">{t.chunkIndex}·{t.duration}m</span>
                         )}
                         {t.dueDate && t.dueDate<day.date && <span className="text-xs text-prism-blue-deep shrink-0 mr-1">from {formatShortDate(t.dueDate)}</span>}
                         <span className="flex-1"></span>
-                        <button
-                          onClick={()=>onToggleExplain(explainKey)}
-                          aria-label={`Why is ${t.title} scheduled here?`}
-                          className={`shrink-0 p-1.5 -m-0 rounded-full border text-[8px] leading-none font-bold flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${isExplaining?'bg-prism-navy border-prism-navy text-white':'border-prism-muted/40 text-prism-muted'}`}
-                          title="Why is this here?"><span className="w-3 h-3 flex items-center justify-center">?</span></button>
-                        {isPinnedHere && (
-                          <button onClick={()=>onUnpin(t.id)} aria-label={`Unpin ${t.title}`} className="shrink-0 p-1.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title="Pinned here manually — click to unpin and let it reschedule automatically">
-                            <Pin className="w-3 h-3 text-prism-violet-deep" fill="currentColor"/>
-                          </button>
-                        )}
-                        <button onClick={()=>onEdit(t.id)} aria-label={`Edit ${t.title}`} className="text-prism-muted/60 shrink-0 p-1.5 rounded-full hover:text-prism-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title={t.recurringId ? 'Edit just this occurrence' : 'Edit this task'}>
-                          <Pencil className="w-3 h-3"/>
+                        <button onClick={()=>onEdit(t.id)} aria-label={`Edit ${t.title}`} className="w-11 h-11 text-prism-muted/60 shrink-0 flex items-center justify-center rounded-full hover:text-prism-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title={t.recurringId ? 'Edit just this occurrence' : 'Edit this task'}>
+                          <Pencil className="w-3.5 h-3.5"/>
                         </button>
-                        <button onClick={()=>onTogglePressing(t.id)} aria-label={t.pressing?`Unmark ${t.title} as pressing`:`Mark ${t.title} as pressing`} className="shrink-0 p-1.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title="Pressing — can use catch-up blocks">
-                          <Star className={`w-3 h-3 ${t.pressing?'text-amber-500':'text-prism-muted/40'}`} fill={t.pressing?'currentColor':'none'}/>
-                        </button>
-                        <button onClick={()=>onDelete(t.id)} aria-label={`Delete ${t.title}`} className="text-prism-muted/60 shrink-0 p-1.5 rounded-full hover:text-rose-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title="Delete this task"><Trash2 className="w-3 h-3"/></button>
+                        <button onClick={()=>onDelete(t.id)} aria-label={`Delete ${t.title}`} className="w-11 h-11 text-prism-muted/60 shrink-0 flex items-center justify-center rounded-full hover:text-rose-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title="Delete this task"><Trash2 className="w-3.5 h-3.5"/></button>
+                        <TaskActionsMenu
+                          taskTitle={t.title}
+                          isExplaining={isExplaining}
+                          onToggleExplain={()=>onToggleExplain(explainKey)}
+                          isPinnedHere={isPinnedHere}
+                          onUnpin={()=>onUnpin(t.id)}
+                          pressing={!!t.pressing}
+                          onTogglePressing={()=>onTogglePressing(t.id)}
+                        />
                       </div>
                     </div>
                   );
@@ -1641,87 +1776,87 @@ function SettingsPanel({ slots, setSlots, recDaily, setRecDaily, recWeekly, setR
     <div className="mt-2">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       <div>
-        <h3 className="text-xs font-semibold text-slate-900 mb-2 uppercase tracking-widest">Flex blocks</h3>
+        <h3 className="text-xs font-semibold text-prism-ink mb-2 uppercase tracking-widest">Flex blocks</h3>
         <div className="space-y-1.5">
           {sortedSlots.map(s=>(
-            <div key={s.id} className="flex items-center justify-between text-sm bg-white border border-slate-200 rounded-xl px-3 py-2">
-              <span className="text-slate-700">{DAY_SHORT[s.day]} {minToLabel(timeToMin(s.start))}–{minToLabel(timeToMin(s.end))}{s.restricted && <span className="text-rose-500"> · catch-up only{slotsUnlocked && ' (unlocked)'}</span>}</span>
-              <button onClick={()=>setSlots(prev=>prev.filter(x=>x.id!==s.id))} aria-label="Delete this flex block" className="text-slate-300"><Trash2 className="w-3.5 h-3.5"/></button>
+            <div key={s.id} className="flex items-center justify-between text-sm bg-white/70 border border-white/60 rounded-xl px-3 py-2">
+              <span className="text-prism-ink">{DAY_SHORT[s.day]} {minToLabel(timeToMin(s.start))}–{minToLabel(timeToMin(s.end))}{s.restricted && <span className="text-rose-500"> · catch-up only{slotsUnlocked && ' (unlocked)'}</span>}</span>
+              <button onClick={()=>setSlots(prev=>prev.filter(x=>x.id!==s.id))} aria-label="Delete this flex block" className="text-prism-muted/50 p-1.5 -m-1.5 rounded-full hover:text-rose-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"><Trash2 className="w-3.5 h-3.5"/></button>
             </div>
           ))}
         </div>
-        <div className="mt-2 flex flex-wrap gap-2 items-center bg-white border border-slate-200 rounded-xl p-2.5">
-          <select value={newSlot.day} onChange={e=>setNewSlot(s=>({...s,day:e.target.value}))} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+        <div className="mt-2 flex flex-wrap gap-2 items-center bg-white/70 border border-white/60 rounded-xl p-2.5">
+          <select value={newSlot.day} onChange={e=>setNewSlot(s=>({...s,day:e.target.value}))} className="text-xs border border-white/60 bg-white/80 text-prism-ink rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep">
             {DAY_NAMES.map((n,i)=><option key={i} value={i}>{n}</option>)}
           </select>
-          <input type="time" value={newSlot.start} onChange={e=>setNewSlot(s=>({...s,start:e.target.value}))} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5"/>
-          <input type="time" value={newSlot.end} onChange={e=>setNewSlot(s=>({...s,end:e.target.value}))} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5"/>
-          <label className="flex items-center gap-1 text-xs text-slate-500">
-            <input type="checkbox" checked={newSlot.restricted} onChange={e=>setNewSlot(s=>({...s,restricted:e.target.checked}))}/> catch-up only
+          <input type="time" value={newSlot.start} onChange={e=>setNewSlot(s=>({...s,start:e.target.value}))} className="text-xs border border-white/60 bg-white/80 text-prism-ink rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
+          <input type="time" value={newSlot.end} onChange={e=>setNewSlot(s=>({...s,end:e.target.value}))} className="text-xs border border-white/60 bg-white/80 text-prism-ink rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
+          <label className="flex items-center gap-1 text-xs text-prism-muted">
+            <input type="checkbox" checked={newSlot.restricted} onChange={e=>setNewSlot(s=>({...s,restricted:e.target.checked}))} className="accent-prism-blue-deep focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"/> catch-up only
           </label>
-          <button onClick={addSlot} className="text-xs bg-slate-900 text-white rounded-lg px-2.5 py-1.5 ml-auto">Add</button>
+          <button onClick={addSlot} className="text-xs bg-prism-cta text-white rounded-lg px-2.5 py-1.5 ml-auto shadow-prism-cta focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">Add</button>
         </div>
       </div>
       <div>
-        <h3 className="text-xs font-semibold text-slate-900 mb-2 uppercase tracking-widest">Daily recurring</h3>
+        <h3 className="text-xs font-semibold text-prism-ink mb-2 uppercase tracking-widest">Daily recurring</h3>
         <div className="space-y-1.5">
           {recDaily.map(r=>(
-            <div key={r.id} className="flex items-center justify-between text-sm bg-white border border-slate-200 rounded-xl px-3 py-2 gap-2">
-              <span className="text-slate-700 flex-1 min-w-0">{r.title} · {r.duration}min</span>
-              <select value={r.preference||''} onChange={e=>setRecDaily(prev=>prev.map(x=>x.id===r.id?{...x,preference:e.target.value||null}:x))} className="text-xs border border-slate-200 rounded-lg px-1.5 py-1 shrink-0">
+            <div key={r.id} className="flex items-center justify-between text-sm bg-white/70 border border-white/60 rounded-xl px-3 py-2 gap-2">
+              <span className="text-prism-ink flex-1 min-w-0">{r.title} · {r.duration}min</span>
+              <select value={r.preference||''} onChange={e=>setRecDaily(prev=>prev.map(x=>x.id===r.id?{...x,preference:e.target.value||null}:x))} className="text-xs border border-white/60 bg-white/80 text-prism-ink rounded-lg px-1.5 py-1 shrink-0 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep">
                 <option value="">No pref</option>
                 <option value="earliest">Earliest</option>
                 <option value="latest">Latest</option>
               </select>
-              <button onClick={()=>setRecDaily(prev=>prev.map(x=>x.id===r.id?{...x,autoExpire:!x.autoExpire}:x))} className={`text-[10px] px-1.5 py-1 rounded-lg border shrink-0 ${r.autoExpire?'border-amber-300 text-amber-700 bg-amber-50':'border-slate-200 text-slate-400'}`}>
+              <button onClick={()=>setRecDaily(prev=>prev.map(x=>x.id===r.id?{...x,autoExpire:!x.autoExpire}:x))} className={`text-[10px] px-1.5 py-1 rounded-lg border shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${r.autoExpire?'border-amber-300 text-amber-700 bg-amber-50':'border-white/60 text-prism-muted'}`}>
                 {r.autoExpire ? 'Auto-expires' : 'Carries over'}
               </button>
-              <button onClick={()=>setRecDaily(prev=>prev.filter(x=>x.id!==r.id))} aria-label={`Delete recurring task ${r.title}`} className="text-slate-300 shrink-0"><Trash2 className="w-3.5 h-3.5"/></button>
+              <button onClick={()=>setRecDaily(prev=>prev.filter(x=>x.id!==r.id))} aria-label={`Delete recurring task ${r.title}`} className="text-prism-muted/50 shrink-0 p-1.5 -m-1.5 rounded-full hover:text-rose-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"><Trash2 className="w-3.5 h-3.5"/></button>
             </div>
           ))}
         </div>
-        <div className="mt-2 flex flex-wrap gap-2 items-center bg-white border border-slate-200 rounded-xl p-2.5">
-          <input value={newDaily.title} onChange={e=>setNewDaily(s=>({...s,title:e.target.value}))} placeholder="Title" className="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5 min-w-0"/>
-          <input type="number" value={newDaily.duration} onChange={e=>setNewDaily(s=>({...s,duration:e.target.value}))} className="w-16 text-xs border border-slate-200 rounded-lg px-2 py-1.5"/>
-          <select value={newDaily.preference} onChange={e=>setNewDaily(s=>({...s,preference:e.target.value}))} className="text-xs border border-slate-200 rounded-lg px-1.5 py-1.5">
+        <div className="mt-2 flex flex-wrap gap-2 items-center bg-white/70 border border-white/60 rounded-xl p-2.5">
+          <input value={newDaily.title} onChange={e=>setNewDaily(s=>({...s,title:e.target.value}))} placeholder="Title" className="flex-1 text-xs border border-white/60 bg-white/80 text-prism-ink placeholder:text-prism-muted rounded-lg px-2 py-1.5 min-w-0 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
+          <input type="number" value={newDaily.duration} onChange={e=>setNewDaily(s=>({...s,duration:e.target.value}))} className="w-16 text-xs border border-white/60 bg-white/80 text-prism-ink rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
+          <select value={newDaily.preference} onChange={e=>setNewDaily(s=>({...s,preference:e.target.value}))} className="text-xs border border-white/60 bg-white/80 text-prism-ink rounded-lg px-1.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep">
             <option value="">No pref</option>
             <option value="earliest">Earliest</option>
             <option value="latest">Latest</option>
           </select>
-          <button type="button" onClick={()=>setNewDaily(s=>({...s,autoExpire:!s.autoExpire}))} className={`text-[10px] px-1.5 py-1.5 rounded-lg border shrink-0 ${newDaily.autoExpire?'border-amber-300 text-amber-700 bg-amber-50':'border-slate-200 text-slate-500'}`}>
+          <button type="button" onClick={()=>setNewDaily(s=>({...s,autoExpire:!s.autoExpire}))} className={`text-[10px] px-1.5 py-1.5 rounded-lg border shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${newDaily.autoExpire?'border-amber-300 text-amber-700 bg-amber-50':'border-white/60 text-prism-muted'}`}>
             {newDaily.autoExpire ? 'Auto-expires' : 'Carries over'}
           </button>
-          <button onClick={addDaily} className="text-xs bg-slate-900 text-white rounded-lg px-2.5 py-1.5 shrink-0">Add</button>
+          <button onClick={addDaily} className="text-xs bg-prism-cta text-white rounded-lg px-2.5 py-1.5 shrink-0 shadow-prism-cta focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">Add</button>
         </div>
       </div>
       <div>
-        <h3 className="text-xs font-semibold text-slate-900 mb-2 uppercase tracking-widest">Weekly recurring</h3>
+        <h3 className="text-xs font-semibold text-prism-ink mb-2 uppercase tracking-widest">Weekly recurring</h3>
         <div className="space-y-1.5">
           {recWeekly.map(r=>(
-            <div key={r.id} className="flex items-center justify-between text-sm bg-white border border-slate-200 rounded-xl px-3 py-2 gap-2">
-              <span className="text-slate-700 flex-1 min-w-0">{r.title} · {r.duration}min{r.day!=null && ` · ${DAY_SHORT[r.day]}`}</span>
+            <div key={r.id} className="flex items-center justify-between text-sm bg-white/70 border border-white/60 rounded-xl px-3 py-2 gap-2">
+              <span className="text-prism-ink flex-1 min-w-0">{r.title} · {r.duration}min{r.day!=null && ` · ${DAY_SHORT[r.day]}`}</span>
               <button onClick={()=>setRecWeekly(prev=>prev.map(x=>x.id===r.id?{...x,autoExpire:!x.autoExpire}:x))}
-                className={`text-[10px] px-1.5 py-1 rounded-lg border shrink-0 ${r.autoExpire?'border-amber-300 text-amber-700 bg-amber-50':'border-slate-200 text-slate-400'}`}
+                className={`text-[10px] px-1.5 py-1 rounded-lg border shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${r.autoExpire?'border-amber-300 text-amber-700 bg-amber-50':'border-white/60 text-prism-muted'}`}
                 title={r.autoExpire ? 'A missed week is dropped rather than carried forward' : 'A missed week keeps carrying over as overdue'}>
                 {r.autoExpire ? 'Auto-expires' : 'Carries over'}
               </button>
-              <button onClick={()=>setRecWeekly(prev=>prev.filter(x=>x.id!==r.id))} aria-label={`Delete recurring task ${r.title}`} className="text-slate-300 shrink-0"><Trash2 className="w-3.5 h-3.5"/></button>
+              <button onClick={()=>setRecWeekly(prev=>prev.filter(x=>x.id!==r.id))} aria-label={`Delete recurring task ${r.title}`} className="text-prism-muted/50 shrink-0 p-1.5 -m-1.5 rounded-full hover:text-rose-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"><Trash2 className="w-3.5 h-3.5"/></button>
             </div>
           ))}
         </div>
-        <div className="mt-2 flex flex-wrap gap-2 items-center bg-white border border-slate-200 rounded-xl p-2.5">
-          <input value={newWeekly.title} onChange={e=>setNewWeekly(s=>({...s,title:e.target.value}))} placeholder="Title" className="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5 min-w-0"/>
-          <input type="number" value={newWeekly.duration} onChange={e=>setNewWeekly(s=>({...s,duration:e.target.value}))} className="w-16 text-xs border border-slate-200 rounded-lg px-2 py-1.5"/>
-          <select value={newWeekly.day} onChange={e=>setNewWeekly(s=>({...s,day:e.target.value}))} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+        <div className="mt-2 flex flex-wrap gap-2 items-center bg-white/70 border border-white/60 rounded-xl p-2.5">
+          <input value={newWeekly.title} onChange={e=>setNewWeekly(s=>({...s,title:e.target.value}))} placeholder="Title" className="flex-1 text-xs border border-white/60 bg-white/80 text-prism-ink placeholder:text-prism-muted rounded-lg px-2 py-1.5 min-w-0 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
+          <input type="number" value={newWeekly.duration} onChange={e=>setNewWeekly(s=>({...s,duration:e.target.value}))} className="w-16 text-xs border border-white/60 bg-white/80 text-prism-ink rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep"/>
+          <select value={newWeekly.day} onChange={e=>setNewWeekly(s=>({...s,day:e.target.value}))} className="text-xs border border-white/60 bg-white/80 text-prism-ink rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-prism-blue-deep">
             <option value="">Any day</option>
             {DAY_NAMES.map((n,i)=><option key={i} value={i}>{n}</option>)}
           </select>
-          <button onClick={addWeekly} className="text-xs bg-slate-900 text-white rounded-lg px-2.5 py-1.5">Add</button>
+          <button onClick={addWeekly} className="text-xs bg-prism-cta text-white rounded-lg px-2.5 py-1.5 shadow-prism-cta focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">Add</button>
         </div>
       </div>
       </div>
       {backlogCount>0 && (
-        <button onClick={onClearBacklog} className="w-full mt-4 text-xs text-slate-500 border border-slate-200 rounded-xl py-2.5">
+        <button onClick={onClearBacklog} className="w-full mt-4 text-xs text-prism-muted border border-white/60 bg-white/50 rounded-xl py-2.5 hover:text-prism-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep">
           Mark {backlogCount} old recurring task{backlogCount>1?'s':''} as done
         </button>
       )}
@@ -1760,22 +1895,22 @@ function CompletedPanel({ records }){
   const labels = { week:'This week', month:'This month', all:'All time' };
   return (
     <div>
-      <div className="flex items-center gap-3 mb-3">
-        <h3 className="text-xs font-semibold text-slate-900 uppercase tracking-widest">Completed work</h3>
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <h3 className="text-xs font-semibold text-prism-ink uppercase tracking-widest">Completed work</h3>
         <div className="flex gap-1">
           {['week','month','all'].map(r=>(
             <button key={r} onClick={()=>setRange(r)}
-              className={`text-xs px-2 py-1 rounded-lg border transition-colors ${range===r?'bg-slate-900 text-white border-slate-900':'border-slate-200 text-slate-500 hover:border-slate-400'}`}>
+              className={`text-xs px-2 py-1 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${range===r?'bg-prism-cta text-white border-transparent':'border-white/60 bg-white/50 text-prism-muted hover:border-prism-blue/50'}`}>
               {labels[r]}
             </button>
           ))}
         </div>
-        <span className="text-xs text-slate-400">
+        <span className="text-xs text-prism-muted/70">
           {filtered.length} task{filtered.length===1?'':'s'} · {formatDurationHM(totalEstimated)} estimated
         </span>
       </div>
       {filtered.length===0 ? (
-        <div className="text-xs text-slate-400">Nothing completed in this period yet.</div>
+        <div className="text-xs text-prism-muted/70">Nothing completed in this period yet.</div>
       ) : (
         <div className="space-y-1">
           {filtered.map(r=>{
@@ -1783,10 +1918,10 @@ function CompletedPanel({ records }){
             const act = r.actualMinutes;
             const over = act!=null && est>0 ? act/est : null;
             return (
-              <div key={r.id+'|'+r.doneAt} className="flex items-baseline gap-2 text-xs border-b border-slate-100 pb-1">
-                <span className="font-mono text-slate-400 shrink-0 w-14">{formatShortDate(toDateStr(new Date(r.doneAt)))}</span>
-                <span className={`flex-1 min-w-0 truncate ${r.recurringId?'text-emerald-700':'text-slate-700'}`}>{r.title}</span>
-                <span className="font-mono text-slate-400 shrink-0">{formatDurationHM(est)}</span>
+              <div key={r.id+'|'+r.doneAt} className="flex items-baseline gap-2 text-xs border-b border-white/50 pb-1">
+                <span className="font-mono text-prism-muted/70 shrink-0 w-14">{formatShortDate(toDateStr(new Date(r.doneAt)))}</span>
+                <span className={`flex-1 min-w-0 truncate ${r.recurringId?'text-emerald-700':'text-prism-ink'}`}>{r.title}</span>
+                <span className="font-mono text-prism-muted/70 shrink-0">{formatDurationHM(est)}</span>
                 {act!=null && (
                   <span className={`font-mono shrink-0 ${over>1.15?'text-amber-600':over<0.85?'text-indigo-600':'text-emerald-600'}`}>
                     actual {formatDurationHM(act)}
@@ -1807,27 +1942,27 @@ function TrendsPanel({ weeklySnapshots, weeklyVolume, accuracy }){
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       <div>
-        <h3 className="text-xs font-semibold text-slate-900 mb-2 uppercase tracking-widest">Weekly busy-ness</h3>
+        <h3 className="text-xs font-semibold text-prism-ink mb-2 uppercase tracking-widest">Weekly busy-ness</h3>
         {weekKeys.length===0 ? (
-          <div className="text-xs text-slate-400">Not enough history yet — this fills in week by week as the traffic light runs.</div>
+          <div className="text-xs text-prism-muted/70">Not enough history yet — this fills in week by week as the traffic light runs.</div>
         ) : (
           <div className="flex items-end gap-2 flex-wrap">
             {weekKeys.map(wk=>(
               <div key={wk} className="flex flex-col items-center gap-1" title={`Week of ${formatShortDate(wk)}: ${weeklySnapshots[wk].level}`}>
                 <span className={`w-3.5 h-3.5 rounded-full ${dotColor[weeklySnapshots[wk].level]}`}></span>
-                <span className="text-xs text-slate-300 font-mono">{formatShortDate(wk)}</span>
+                <span className="text-xs text-prism-muted/60 font-mono">{formatShortDate(wk)}</span>
               </div>
             ))}
           </div>
         )}
       </div>
       <div>
-        <h3 className="text-xs font-semibold text-slate-900 mb-2 uppercase tracking-widest">Estimate vs actual</h3>
+        <h3 className="text-xs font-semibold text-prism-ink mb-2 uppercase tracking-widest">Estimate vs actual</h3>
         {!accuracy ? (
-          <div className="text-xs text-slate-400">Log actual time on a few completed tasks (via the completion prompt) to see this.</div>
+          <div className="text-xs text-prism-muted/70">Log actual time on a few completed tasks (via the completion prompt) to see this.</div>
         ) : (
-          <div className="text-sm text-slate-600">
-            Based on <span className="font-mono font-semibold text-slate-900">{accuracy.count}</span> task{accuracy.count>1?'s':''} with logged time, you're averaging{' '}
+          <div className="text-sm text-prism-muted">
+            Based on <span className="font-mono font-semibold text-prism-ink">{accuracy.count}</span> task{accuracy.count>1?'s':''} with logged time, you're averaging{' '}
             <span className={`font-mono font-semibold ${accuracy.ratio>1.15?'text-amber-600':accuracy.ratio<0.85?'text-indigo-600':'text-emerald-600'}`}>
               {accuracy.ratio>=1 ? `${Math.round((accuracy.ratio-1)*100)}% longer` : `${Math.round((1-accuracy.ratio)*100)}% shorter`}
             </span>{' '}than estimated.
@@ -1835,17 +1970,17 @@ function TrendsPanel({ weeklySnapshots, weeklyVolume, accuracy }){
         )}
       </div>
       <div>
-        <h3 className="text-xs font-semibold text-slate-900 mb-2 uppercase tracking-widest">Completed per week</h3>
+        <h3 className="text-xs font-semibold text-prism-ink mb-2 uppercase tracking-widest">Completed per week</h3>
         {weeklyVolume.length===0 ? (
-          <div className="text-xs text-slate-400">No history yet.</div>
+          <div className="text-xs text-prism-muted/70">No history yet.</div>
         ) : (
           <div className="flex items-end gap-2 h-16">
             {weeklyVolume.map(w=>{
               const heightPct = w.count===0 ? 4 : Math.max(10, Math.round((w.count/maxVolume)*100));
               return (
                 <div key={w.weekStart} className="flex flex-col items-center justify-end gap-1 h-full">
-                  <span className="text-xs text-slate-400 font-mono">{w.count}</span>
-                  <div className="w-4 bg-violet-300 rounded-t" style={{ height: `${heightPct}%` }}></div>
+                  <span className="text-xs text-prism-muted/70 font-mono">{w.count}</span>
+                  <div className="w-4 bg-prism-violet/60 rounded-t" style={{ height: `${heightPct}%` }}></div>
                 </div>
               );
             })}
@@ -1910,6 +2045,30 @@ export default function WeekPlanner(){
   const [showAddMeeting,setShowAddMeeting] = useState(false);
   const [editingMeetingId,setEditingMeetingId] = useState(null); // meeting open in the edit form, or null
   const [pendingUndo,setPendingUndo] = useState(null); // { task, timeoutId } — a just-deleted task that can still be restored
+  /*
+    FAB/footer overlap fix. The footer bar (StatsBar + drawer toggles) uses
+    `flex-wrap` and wraps onto a second line at narrow widths (measured at
+    375px and 768px), while the Capture Thought FAB below is `position:
+    fixed`, so it floats independently of document flow and does not push
+    off the footer when it grows. A fixed Tailwind breakpoint chosen to
+    dodge the wrap is fragile — it only covers the widths someone measured.
+    Measuring the footer's real rendered height and feeding it to the FAB as
+    a bottom offset is breakpoint-agnostic: it's correct whether the footer
+    is one line or two, at any width, on any content change (e.g. a future
+    fourth drawer toggle).
+  */
+  const footerRef = useRef(null);
+  const [footerHeight,setFooterHeight] = useState(0);
+  useEffect(()=>{
+    const el = footerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(entries=>{
+      const h = entries[0]?.contentRect?.height;
+      if (typeof h === 'number') setFooterHeight(h);
+    });
+    ro.observe(el);
+    return ()=>ro.disconnect();
+  },[]);
   useEffect(()=>{
     /*
       Tick on the MINUTE, not every 30 seconds. `now` feeds buildSchedule and five
@@ -2474,7 +2633,7 @@ export default function WeekPlanner(){
           </div>
         </div>
       </div>
-      <div className="relative z-10 shrink-0 border-t border-white/60 bg-white/70 backdrop-blur-xl backdrop-saturate-150">
+      <div ref={footerRef} className="relative z-10 shrink-0 border-t border-white/60 bg-white/70 backdrop-blur-xl backdrop-saturate-150">
         <div className="flex items-center gap-6 px-6 py-3 flex-wrap">
           <StatsBar stats={stats}/>
           <div className="flex-1"></div>
@@ -2513,7 +2672,7 @@ export default function WeekPlanner(){
             />
             <button
               onClick={handleManualImport}
-              className="w-full mt-4 text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl py-2 hover:text-slate-600 hover:border-slate-300"
+              className="w-full mt-4 text-xs text-prism-muted/70 border border-dashed border-white/60 rounded-xl py-2 hover:text-prism-ink hover:border-prism-blue/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"
               title="Only needed if this browser has tasks that never made it to the cloud — safe to press any time, it never duplicates"
             >
               Import any tasks saved in this browser
@@ -2548,7 +2707,7 @@ export default function WeekPlanner(){
           </button>
         </div>
       )}
-      <CaptureThought uid={user.uid} onAddTodo={addTask}/>
+      <CaptureThought uid={user.uid} onAddTodo={addTask} footerHeight={footerHeight}/>
     </div>
   );
 }

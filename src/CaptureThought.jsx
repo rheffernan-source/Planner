@@ -22,7 +22,7 @@ const CATEGORIES = [
  * into Team Inbox for Penn's normal routing — this component never talks to
  * myPKA directly.
  */
-export default function CaptureThought({ uid, onAddTodo }){
+export default function CaptureThought({ uid, onAddTodo, footerHeight = 0 }){
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState('');
   const [category, setCategory] = useState(null);
@@ -121,13 +121,26 @@ export default function CaptureThought({ uid, onAddTodo }){
         reachable, but still a live, focusable element for `close()` to
         return to.
       */}
+      {/*
+        `bottom` is set inline rather than via a Tailwind `bottom-*` class:
+        the footer bar below wraps to a second line at some widths (measured
+        at 375px and 768px) and not others, so a fixed class would only be
+        correct at the widths someone happened to measure. `footerHeight`
+        (from a ResizeObserver on the footer in App.jsx) is the footer's real
+        rendered height at the current width/content, so this offset is
+        correct at every breakpoint and stays correct if the footer's
+        content changes later. +16px is the same visual gap `bottom-6`
+        (24px) minus the extra breathing room already inside the footer's
+        own padding gave a single-line footer.
+      */}
       <button
         ref={triggerRef}
         onClick={()=>setOpen(true)}
         aria-label="Capture a thought"
         tabIndex={open ? -1 : 0}
         aria-hidden={open}
-        className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 pl-4 pr-5 py-3.5 min-h-[44px] rounded-full bg-prism-cta text-white font-semibold text-sm shadow-prism-cta active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-prism-blue-deep ${open ? 'opacity-0 pointer-events-none' : ''}`}
+        style={{ bottom: footerHeight > 0 ? `${footerHeight + 16}px` : '1.5rem' }}
+        className={`fixed left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 pl-4 pr-5 py-3.5 min-h-[44px] rounded-full bg-prism-cta text-white font-semibold text-sm shadow-prism-cta active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-prism-blue-deep ${open ? 'opacity-0 pointer-events-none' : ''}`}
       >
         <NotebookPen className="w-5 h-5"/> Capture thought
       </button>

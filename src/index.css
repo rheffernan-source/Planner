@@ -1,3 +1,22 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+  iOS Safari (and any WebKit browser sharing its engine, e.g. Arc) zooms the
+  whole page in when a text input/textarea/select is focused if its computed
+  font-size is under 16px, and the zoom sticks until the user manually pinches
+  back out. Every form field in this app is Tailwind text-xs or text-sm (12-
+  14px) for visual density, so focusing ANY of them — Capture's autoFocus
+  textarea included — triggered this and made the rest of the page look
+  broken afterwards, not just the field itself. `!important` because a plain
+  element selector is lower specificity than the .text-xs/.text-sm utility
+  classes already on these fields; this is the standard fix for this bug, not
+  a shortcut. Desktop keeps its smaller type — this only overrides below the
+  `sm` breakpoint, where the zoom-on-focus behaviour actually applies.
+*/
+@media (max-width: 639px) {
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+}

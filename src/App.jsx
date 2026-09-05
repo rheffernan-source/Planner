@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2, Users, CalendarPlus, MoreVertical, HelpCircle } from 'lucide-react';
+import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2, Users, CalendarPlus, MoreVertical, HelpCircle, TrendingUp } from 'lucide-react';
 import { useAuth, useCloudTasks, useCloudDoc, importFromThisBrowser } from './cloudSync';
 import { SyncBadge } from './AuthGate';
 import CaptureThought from './CaptureThought';
@@ -1075,6 +1075,22 @@ function computeDueDateRisk(tasks, baselineSchedule, todayStr){
 function Eyebrow({ children, className='' }){
   return <div className={`text-xs font-semibold tracking-widest uppercase ${className}`}>{children}</div>;
 }
+// One item in the phone-only bottom bar. The drawer toggles it replaces read
+// as a wrapped third row of text links at 390px, which is what the Capture
+// button kept landing on top of.
+function TabBarButton({ icon: Icon, label, active, onClick }){
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] px-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-prism-blue-deep ${active ? 'text-prism-blue-deep' : 'text-prism-muted'}`}
+    >
+      <Icon className="w-5 h-5 shrink-0"/>
+      <span className="text-[11px] font-semibold leading-none">{label}</span>
+    </button>
+  );
+}
+
 function WorkloadIndicator({ workload }){
   const dotConfig = [
     { key:'red', activeClass:'bg-rose-500', dimClass:'bg-rose-100' },
@@ -2639,18 +2655,21 @@ export default function WeekPlanner(){
         </div>
       </div>
       <div ref={footerRef} className="relative z-10 shrink-0 border-t border-white/60 bg-white/70 backdrop-blur-xl backdrop-saturate-150">
-        <div className="flex items-center gap-4 sm:gap-6 px-4 sm:px-6 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex-wrap">
+        <div className="flex items-center gap-4 sm:gap-6 px-4 sm:px-6 py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] flex-wrap">
           <StatsBar stats={stats}/>
           <div className="flex-1"></div>
-          <button onClick={()=>setOpenDrawer(d=>d==='completed'?null:'completed')} className="flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">
+          {/* Below sm these three live in the bottom bar instead — as text
+              links they wrapped onto their own row and the Capture button
+              landed on top of them. */}
+          <button onClick={()=>setOpenDrawer(d=>d==='completed'?null:'completed')} className="hidden sm:flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">
             Completed
             {openDrawer==='completed' ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
           </button>
-          <button onClick={()=>setOpenDrawer(d=>d==='trends'?null:'trends')} className="flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">
+          <button onClick={()=>setOpenDrawer(d=>d==='trends'?null:'trends')} className="hidden sm:flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">
             Term trends
             {openDrawer==='trends' ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
           </button>
-          <button onClick={()=>setOpenDrawer(d=>d==='settings'?null:'settings')} className="flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">
+          <button onClick={()=>setOpenDrawer(d=>d==='settings'?null:'settings')} className="hidden sm:flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">
             <Settings2 className="w-4 h-4"/> Time slots & recurring tasks
             {openDrawer==='settings' ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
           </button>
@@ -2684,6 +2703,15 @@ export default function WeekPlanner(){
             </button>
           </div>
         )}
+        {/* Phone-only bottom bar. It lives INSIDE the element the footer's
+            ResizeObserver watches, so footerHeight already accounts for it and
+            the Capture button clears the whole footer without measuring
+            anything new. */}
+        <nav aria-label="Panels" className="sm:hidden flex items-stretch border-t border-white/50 pb-[env(safe-area-inset-bottom)]">
+          <TabBarButton icon={Check} label="Completed" active={openDrawer==='completed'} onClick={()=>setOpenDrawer(d=>d==='completed'?null:'completed')}/>
+          <TabBarButton icon={TrendingUp} label="Trends" active={openDrawer==='trends'} onClick={()=>setOpenDrawer(d=>d==='trends'?null:'trends')}/>
+          <TabBarButton icon={Settings2} label="Slots" active={openDrawer==='settings'} onClick={()=>setOpenDrawer(d=>d==='settings'?null:'settings')}/>
+        </nav>
       </div>
       {toast && (
         <div key={toast.id} className="animate-prism-toast motion-reduce:animate-none fixed bottom-6 right-6 z-50 bg-prism-navy text-white rounded-2xl shadow-prism-card px-5 py-4 max-w-xs">

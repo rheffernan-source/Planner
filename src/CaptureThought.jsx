@@ -209,7 +209,19 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
         <NotebookPen className="w-5 h-5"/> Capture thought
       </button>
 
-      {open && (
+      {/*
+        Portalled straight to <body>, not left as a descendant of the app
+        shell. The shell (`week-planner-root`) carries `overflow-hidden` and
+        `isolate`; iOS/WebKit has long-standing bugs where a `position:fixed`
+        element nested inside such an ancestor gets sized/clipped against
+        that ancestor's box instead of the true viewport, which is exactly
+        the "cropped past the right edge" symptom this dialog showed on
+        phone — the day board and footer never hit it because they're plain
+        flowed content, not fixed-position. `dockEl` above shows the pattern
+        already exists in this component for the trigger button; this is the
+        same fix applied to the dialog itself.
+      */}
+      {open && createPortal(
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-prism-navy/50 backdrop-blur-sm" onClick={close}>
           <div
             ref={sheetRef}
@@ -317,7 +329,8 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
               Save
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );

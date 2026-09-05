@@ -1415,13 +1415,25 @@ function TaskActionsMenu({ taskTitle, isExplaining, onToggleExplain, isPinnedHer
 function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, onTogglePressing, onUnpin, slotsUnlocked, atRiskIds, draggingTaskId, onDragStartTask, onDragEndTask, dragOverKey, onDragOverSlot, onDropOnSlot, explainingKey, onToggleExplain, onEditMeeting, onDeleteMeeting, onAddActionPoint, actionPointsByMeeting, placementByTaskId }){
   const d = parseDateStr(day.date);
   return (
-    <div className={`flex flex-col h-full rounded-2xl border backdrop-blur-md overflow-hidden shadow-prism-soft ${isToday?'border-prism-blue/40 bg-prism-blue/5':'border-white/60 bg-white/60'}`}>
+    /*
+      Two layouts, one tree. On a phone the days stack and the PAGE scrolls, so
+      the card takes its natural height and its list does not scroll on its own
+      (a scroller inside a scroller on a touch screen traps the gesture). From
+      `sm` up the days are columns in a horizontal board again, each a
+      full-height card with its own scrolling list.
+    */
+    <div className={`flex-col sm:h-full rounded-2xl border backdrop-blur-md overflow-hidden shadow-prism-soft ${
+      // A day with nothing in it is worth a column on the desktop board (it
+      // shows the week's shape) but on a phone it is a card that says only
+      // "No flex blocks" between you and the next real day.
+      day.rows.length===0 ? 'hidden sm:flex' : 'flex'
+    } ${isToday?'border-prism-blue/40 bg-prism-blue/5':'border-white/60 bg-white/60'}`}>
       <div className={`px-3 py-2.5 shrink-0 border-b ${isToday?'border-prism-blue/25':'border-white/50'}`}>
         {weekLabel && <div className="text-xs font-semibold text-prism-violet uppercase tracking-widest mb-1">{weekLabel}</div>}
         <div className={`text-xs font-semibold ${isToday?'text-prism-blue-deep':'text-prism-muted'}`}>{DAY_NAMES[day.dayOfWeek]}{isToday?' · Today':''}</div>
         <div className="text-xs text-prism-muted/70">{d.toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
       </div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+      <div className="flex-1 sm:overflow-y-auto p-2 space-y-2">
         {day.rows.length===0 ? (
           <div className="text-xs text-prism-muted/60 italic py-1 px-1">No flex blocks</div>
         ) : day.rows.map(row=>{
@@ -1459,7 +1471,13 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
               }`}>
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-1">
-                  <span className="font-mono text-xs text-prism-muted">{minToLabel(inst.startMin)}</span>
+                  {/* The full range, not just the start. These blocks ARE the
+                      sections of the day — "07:40 – 08:00" says what the block
+                      is and how long you have in it without reading the
+                      capacity figure. */}
+                  <span className="font-mono text-sm sm:text-xs font-medium text-prism-ink sm:text-prism-muted sm:font-normal">
+                    {minToLabel(inst.startMin)} – {minToLabel(inst.endMin)}
+                  </span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {isUnlockedRestricted && <span className="text-xs text-rose-500 font-medium">unlocked</span>}
@@ -1502,7 +1520,7 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
                         <button onClick={()=>onToggleDone(t.id, t.sessionId)} aria-label={t.done?`Mark ${t.title} not done`:`Mark ${t.title} done`} className={`w-7 h-7 -mt-1 -ml-1 rounded-full border shrink-0 flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep focus-visible:ring-offset-1 ${t.done?'bg-emerald-500 border-emerald-500':'border-prism-muted/40'}`}>
                           {t.done && <Check className="w-3.5 h-3.5 text-white"/>}
                         </button>
-                        <span className={`flex-1 min-w-0 break-words text-xs ${t.done?'line-through text-prism-muted':'text-prism-ink'}`}>{t.title}</span>
+                        <span className={`flex-1 min-w-0 break-words text-sm sm:text-xs ${t.done?'line-through text-prism-muted':'text-prism-ink'}`}>{t.title}</span>
                         {/* Decorative status glyphs — the interactive toggles for both
                             live in the overflow menu now; these just keep pinned/pressing
                             scannable at a glance without needing to open it. */}
@@ -2646,8 +2664,20 @@ export default function WeekPlanner(){
               </span>
             </div>
           )}
-          <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0">
-            <div className="grid gap-3 h-full" style={{ gridTemplateColumns: `repeat(${Math.max(groupedDays.length,1)}, minmax(260px, 1fr))` }}>
+          {/* Phone: one full-width day per row, today first, the page scrolling
+              down through the horizon. Tablet and up: the original horizontal
+              board. The column count has to travel as a CSS variable because an
+              inline style cannot be scoped to a breakpoint, and applying it
+              unconditionally is exactly what forced a 14-column, 3,600px-wide
+              grid onto a 390px screen. */}
+          {/* No overflow of its own below `sm`: the content area above is
+              already the page scroller there, and a second scroller inside it
+              would swallow the drag. */}
+          <div className="flex-1 min-h-0 sm:overflow-x-auto sm:overflow-y-hidden">
+            <div
+              className="grid gap-3 grid-cols-1 sm:h-full sm:grid-cols-[repeat(var(--day-count),minmax(260px,1fr))]"
+              style={{ '--day-count': Math.max(groupedDays.length,1) }}
+            >
               {groupedDays.map(day=>(
                 <DayColumn key={day.date} day={day} isToday={day.date===todayStr} weekLabel={day.date===nextWeekStart ? 'Next week' : day.date===weekThreeStart ? 'Week after' : null} onToggleDone={toggleDone} onDelete={deleteTask} onEdit={startEditing} onTogglePressing={togglePressing} onUnpin={unpinTask} slotsUnlocked={slotsUnlocked} atRiskIds={dueDateRisk.atRiskIds} draggingTaskId={draggingTaskId} onDragStartTask={handleDragStartTask} onDragEndTask={handleDragEndTask} dragOverKey={dragOverKey} onDragOverSlot={setDragOverKey} onDropOnSlot={handleDropOnSlot} explainingKey={explainingKey} onToggleExplain={toggleExplain} onEditMeeting={startEditingMeeting} onDeleteMeeting={deleteMeeting} onAddActionPoint={addActionPoint} actionPointsByMeeting={actionPointsByMeeting} placementByTaskId={placementByTaskId}/>
               ))}

@@ -2503,15 +2503,16 @@ export default function WeekPlanner(){
         <div className="absolute -bottom-56 -right-44 w-[680px] h-[680px] rounded-full bg-prism-blob-violet blur-prism-blob opacity-45"/>
         <div className="absolute top-[40%] left-[55%] w-[420px] h-[420px] rounded-full bg-prism-blob-navy blur-prism-blob opacity-[0.14]"/>
       </div>
-      <header className="relative z-10 flex items-center justify-between px-6 py-4 border-b border-white/60 bg-white/55 backdrop-blur-xl backdrop-saturate-150 shrink-0">
-        <div>
+      <header className="relative z-10 flex items-center justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 pt-[max(0.75rem,env(safe-area-inset-top))] border-b border-white/60 bg-white/55 backdrop-blur-xl backdrop-saturate-150 shrink-0">
+        <div className="min-w-0">
           <Eyebrow className="text-prism-blue-deep">Week Planner</Eyebrow>
-          <div className="text-2xl font-display font-semibold text-prism-ink">{DAY_NAMES[now.getDay()]}, {now.toLocaleDateString('en-AU',{day:'numeric',month:'long'})}</div>
+          <div className="text-lg sm:text-2xl font-display font-semibold text-prism-ink truncate">{DAY_NAMES[now.getDay()]}, {now.toLocaleDateString('en-AU',{day:'numeric',month:'long'})}</div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4 shrink-0">
           <SyncBadge status={syncStatus}/>
           <WorkloadIndicator workload={workload}/>
-          <div className="font-mono text-3xl text-prism-muted/70 tabular-nums">{minToLabel(nowMin)}</div>
+          {/* The phone's own status bar already shows the time. */}
+          <div className="hidden sm:block font-mono text-3xl text-prism-muted/70 tabular-nums">{minToLabel(nowMin)}</div>
           <button onClick={signOut} className="text-xs text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">Sign out</button>
         </div>
       </header>
@@ -2634,7 +2635,7 @@ export default function WeekPlanner(){
         </div>
       </div>
       <div ref={footerRef} className="relative z-10 shrink-0 border-t border-white/60 bg-white/70 backdrop-blur-xl backdrop-saturate-150">
-        <div className="flex items-center gap-6 px-6 py-3 flex-wrap">
+        <div className="flex items-center gap-4 sm:gap-6 px-4 sm:px-6 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex-wrap">
           <StatsBar stats={stats}/>
           <div className="flex-1"></div>
           <button onClick={()=>setOpenDrawer(d=>d==='completed'?null:'completed')} className="flex items-center gap-2 text-sm font-medium text-prism-muted hover:text-prism-ink rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep shrink-0">

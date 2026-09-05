@@ -2077,6 +2077,7 @@ export default function WeekPlanner(){
   */
   const footerRef = useRef(null);
   const [footerHeight,setFooterHeight] = useState(0);
+  const [captureDockEl,setCaptureDockEl] = useState(null);
   useEffect(()=>{
     const el = footerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -2710,6 +2711,11 @@ export default function WeekPlanner(){
         <nav aria-label="Panels" className="sm:hidden flex items-stretch border-t border-white/50 pb-[env(safe-area-inset-bottom)]">
           <TabBarButton icon={Check} label="Completed" active={openDrawer==='completed'} onClick={()=>setOpenDrawer(d=>d==='completed'?null:'completed')}/>
           <TabBarButton icon={TrendingUp} label="Trends" active={openDrawer==='trends'} onClick={()=>setOpenDrawer(d=>d==='trends'?null:'trends')}/>
+          {/* Slot for CaptureThought's docked trigger. It is a callback ref
+              into state rather than a useRef so the portal renders as soon as
+              this node exists; a plain ref would not re-render CaptureThought
+              on mount and the slot would stay empty until something else did. */}
+          <div ref={setCaptureDockEl} className="flex-1 flex items-stretch"/>
           <TabBarButton icon={Settings2} label="Slots" active={openDrawer==='settings'} onClick={()=>setOpenDrawer(d=>d==='settings'?null:'settings')}/>
         </nav>
       </div>
@@ -2740,7 +2746,7 @@ export default function WeekPlanner(){
           </button>
         </div>
       )}
-      <CaptureThought uid={user.uid} onAddTodo={addTask} footerHeight={footerHeight}/>
+      <CaptureThought uid={user.uid} onAddTodo={addTask} footerHeight={footerHeight} dockEl={captureDockEl}/>
     </div>
   );
 }

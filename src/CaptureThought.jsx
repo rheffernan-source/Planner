@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { NotebookPen, X, Lightbulb, ListTodo, Flag, MessageCircle, Loader2 } from 'lucide-react';
 import { createCapture } from './cloudSync';
 import { DURATION_PRESETS, MIN_TASK_MINUTES } from './App';
@@ -22,7 +23,7 @@ const CATEGORIES = [
  * into Team Inbox for Penn's normal routing — this component never talks to
  * myPKA directly.
  */
-export default function CaptureThought({ uid, onAddTodo, footerHeight = 0 }){
+export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockEl = null }){
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState('');
   const [category, setCategory] = useState(null);
@@ -32,6 +33,15 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0 }){
   const [saving, setSaving] = useState(false);
   const sheetRef = useRef(null);
   const triggerRef = useRef(null);
+  /*
+    There are two triggers now — the docked tab in the phone bottom bar and the
+    floating pill on wider screens — and only one of them is displayed at a
+    time. Rather than re-deriving which one that is on close (a media query in
+    JS that would have to stay in step with the `sm:` classes below), remember
+    the element that actually opened the sheet: it was visible a moment ago by
+    definition. `triggerRef` (the pill) stays the fallback.
+  */
+  const lastTriggerRef = useRef(null);
 
   function reset(){
     setNote('');
@@ -41,12 +51,21 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0 }){
     setDueDate('');
     setSaving(false);
   }
+  function openFrom(e){
+    lastTriggerRef.current = e?.currentTarget ?? null;
+    setOpen(true);
+  }
   function close(){
     setOpen(false);
     reset();
-    // Restore focus to the FAB that opened the sheet, mirroring the
+    // Restore focus to the trigger that opened the sheet, mirroring the
     // TaskForm/MeetingForm pattern of returning focus to the trigger.
-    triggerRef.current?.focus();
+    // `offsetParent` is null for a `display:none` element, which is exactly
+    // what the losing trigger is after a breakpoint change mid-sheet.
+    const last = lastTriggerRef.current;
+    lastTriggerRef.current = null;
+    if (last?.isConnected && last.offsetParent !== null) last.focus();
+    else triggerRef.current?.focus();
   }
 
   /*
@@ -122,6 +141,30 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0 }){
         return to.
       */}
       {/*
+        On a phone the trigger is docked into the bottom bar instead of
+        floating over it. App.jsx hands us the slot element it reserved inside
+        its own <nav>; portalling into it keeps the button in the bar visually
+        and for the keyboard, while open/close state, the focus trap and the
+        restore contract all stay in this component. `dockEl` is null until the
+        nav has mounted, and on desktop the nav is `display:none`, so the
+        floating pill below is the trigger there.
+      */}
+      {dockEl && createPortal(
+        <button
+          onClick={openFrom}
+          aria-label="Capture a thought"
+          aria-expanded={open}
+          className="flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] px-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-prism-blue-deep"
+        >
+          <span className="flex items-center justify-center w-9 h-9 rounded-full bg-prism-cta text-white shadow-prism-cta active:scale-95 transition-transform">
+            <NotebookPen className="w-5 h-5"/>
+          </span>
+          <span className="text-[11px] font-semibold leading-none text-prism-blue-deep">Capture</span>
+        </button>,
+        dockEl
+      )}
+
+      {/*
         `bottom` is set inline rather than via a Tailwind `bottom-*` class:
         the footer bar below wraps to a second line at some widths (measured
         at 375px and 768px) and not others, so a fixed class would only be
@@ -135,12 +178,13 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0 }){
       */}
       <button
         ref={triggerRef}
-        onClick={()=>setOpen(true)}
+        onClick={openFrom}
         aria-label="Capture a thought"
+        aria-expanded={open}
         tabIndex={open ? -1 : 0}
         aria-hidden={open}
         style={{ bottom: footerHeight > 0 ? `${footerHeight + 16}px` : '1.5rem' }}
-        className={`fixed left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 pl-4 pr-5 py-3.5 min-h-[44px] rounded-full bg-prism-cta text-white font-semibold text-sm shadow-prism-cta active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-prism-blue-deep ${open ? 'opacity-0 pointer-events-none' : ''}`}
+        className={`fixed left-1/2 -translate-x-1/2 z-40 hidden sm:flex items-center gap-2 pl-4 pr-5 py-3.5 min-h-[44px] rounded-full bg-prism-cta text-white font-semibold text-sm shadow-prism-cta active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-prism-blue-deep ${open ? 'opacity-0 pointer-events-none' : ''}`}
       >
         <NotebookPen className="w-5 h-5"/> Capture thought
       </button>

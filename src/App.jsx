@@ -1096,13 +1096,15 @@ function WorkloadIndicator({ workload }){
         ? `${formatDurationHM(workload.overflowMinutes)} of work won't fit this week — catch-up sessions are open to anything until this clears.`
         : `${formatDurationHM(workload.overflowMinutes)} of work is running past this week. You're at ${pct}% of remaining flex time.`;
   return (
-    <div className="flex items-center gap-2.5 px-3 py-2 rounded-2xl border border-white/60 bg-white/55 backdrop-blur-md shadow-prism-soft" title={description}>
+    <div className="flex items-center gap-2.5 px-2 sm:px-3 py-1.5 sm:py-2 rounded-2xl border border-white/60 bg-white/55 backdrop-blur-md shadow-prism-soft" title={description}>
       <div className="flex flex-col gap-1 bg-prism-navy rounded-md px-1.5 py-1.5">
         {dotConfig.map(d=>(
           <span key={d.key} className={`w-2.5 h-2.5 rounded-full ${workload.level===d.key?d.activeClass:d.dimClass}`}></span>
         ))}
       </div>
-      <div className="flex flex-col leading-tight">
+      {/* The traffic light alone carries the signal on a phone. These two
+          lines of prose are what crushed the date out of the header at 390px. */}
+      <div className="hidden sm:flex flex-col leading-tight">
         <span className="text-xs font-semibold text-prism-ink">{label}</span>
         <span className="text-xs text-prism-muted">
           {workload.remainingCapacityMinutes>0 ? `${pct}% of flex time left this week` : "This week's load"}
@@ -2504,12 +2506,14 @@ export default function WeekPlanner(){
         <div className="absolute top-[40%] left-[55%] w-[420px] h-[420px] rounded-full bg-prism-blob-navy blur-prism-blob opacity-[0.14]"/>
       </div>
       <header className="relative z-10 flex items-center justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 pt-[max(0.75rem,env(safe-area-inset-top))] border-b border-white/60 bg-white/55 backdrop-blur-xl backdrop-saturate-150 shrink-0">
-        <div className="min-w-0">
-          <Eyebrow className="text-prism-blue-deep">Week Planner</Eyebrow>
+        <div className="min-w-0 flex-1">
+          <Eyebrow className="hidden sm:block text-prism-blue-deep">Week Planner</Eyebrow>
           <div className="text-lg sm:text-2xl font-display font-semibold text-prism-ink truncate">{DAY_NAMES[now.getDay()]}, {now.toLocaleDateString('en-AU',{day:'numeric',month:'long'})}</div>
         </div>
         <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-          <SyncBadge status={syncStatus}/>
+          {/* Sync state is reassurance, not a control — the workload light is
+              the signal worth the width on a phone. */}
+          <div className="hidden sm:block"><SyncBadge status={syncStatus}/></div>
           <WorkloadIndicator workload={workload}/>
           {/* The phone's own status bar already shows the time. */}
           <div className="hidden sm:block font-mono text-3xl text-prism-muted/70 tabular-nums">{minToLabel(nowMin)}</div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2, Users, CalendarPlus, MoreVertical, HelpCircle, TrendingUp } from 'lucide-react';
+import { Check, Plus, X, Trash2, ChevronDown, ChevronUp, Settings2, Loader2, Star, PartyPopper, Pin, Pencil, Undo2, Users, CalendarPlus, MoreVertical, HelpCircle, TrendingUp, Play, CalendarClock } from 'lucide-react';
 import { useAuth, useCloudTasks, useCloudDoc, importFromThisBrowser } from './cloudSync';
 import { SyncBadge } from './AuthGate';
 import CaptureThought from './CaptureThought';
@@ -94,6 +94,14 @@ function makeTask({ title, duration, dueDate, recurringId=null, recurringDate=nu
   // can't be scheduled before the meeting that produced it has actually happened.
   return { id: genId(), title, duration: Number(duration), dueDate, pressing, done:false, doneAt:null, createdAt: order, source, recurringId, recurringDate, preference, actualMinutes:null, pinnedTo: null, meetingId, notBefore };
 }
+// The later of two { date, minute } boundaries — used so deferring a task can
+// only ever push it further out, never pull an existing restriction earlier.
+function laterBoundary(a, b){
+  if (!a) return b;
+  if (!b) return a;
+  if (a.date !== b.date) return a.date > b.date ? a : b;
+  return a.minute >= b.minute ? a : b;
+}
 // True when this slot instance starts before the task is allowed to begin.
 function blockedByNotBefore(task, inst){
   const nb = task.notBefore;
@@ -156,6 +164,9 @@ const MIN_CHUNK = 15;
 // The floor for any task's own duration, matching MIN_CHUNK so a task can never be
 // created smaller than the smallest piece the scheduler is willing to carve.
 export const MIN_TASK_MINUTES = 15;
+// Where the running timer survives a reload. Device-local by design — see the
+// comment on activeTimer in App.
+const TIMER_KEY = 'prism.activeTimer';
 /*
   SESSIONS MODEL (carve once, then fixed forever)
   ------------------------------------------------
@@ -1295,7 +1306,96 @@ function MeetingRow({ meeting, actionPoints, placementByTaskId, onEditMeeting, o
   the capture phase — covers the day column scrolling, not just window
   scroll, since inner-element scroll events don't bubble.
 */
-function TaskActionsMenu({ taskTitle, isExplaining, onToggleExplain, isPinnedHere, onUnpin, pressing, onTogglePressing }){
+/*
+  The running-task timer.
+
+  It counts UP and keeps going past the estimate rather than stopping or
+  alarming: an overrun is information — it is the raw material the accuracy
+  figure in Trends is built from — not a failure to be interrupted about. Past
+  the estimate the bar stays full and turns amber, and the label switches to
+  how far over you are.
+
+  It owns its own one-second tick. Putting that interval in App would re-render
+  the whole board — up to three weeks of day columns — every second for the
+  sake of one changing label.
+
+  Elapsed time is always derived from the absolute `startedAt`, never
+  accumulated, so a locked phone, a backgrounded PWA or a throttled timer
+  cannot make the count drift.
+*/
+function TimerBar({ timer, task, onDone, onNotComplete, onCancel }){
+  const [nowMs, setNowMs] = useState(()=>Date.now());
+  useEffect(()=>{
+    setNowMs(Date.now());
+    const h = setInterval(()=>setNowMs(Date.now()), 1000);
+    return ()=>clearInterval(h);
+  },[timer.startedAt]);
+
+  const elapsedSec = Math.max(0, Math.floor((nowMs - timer.startedAt)/1000));
+  const plannedSec = Math.max(60, timer.plannedMinutes*60);
+  const over = elapsedSec > plannedSec;
+  const pct = Math.min(100, (elapsedSec/plannedSec)*100);
+  const overSec = elapsedSec - plannedSec;
+
+  return (
+    <div className="px-4 sm:px-6 pt-3 pb-2 border-b border-white/50">
+      <div className="flex items-center gap-3 mb-2">
+        <span className={`font-mono text-lg tabular-nums shrink-0 ${over?'text-amber-600':'text-prism-ink'}`}>
+          {fmtClock(elapsedSec)}
+        </span>
+        <span className="flex-1 min-w-0 truncate text-sm text-prism-ink">{task ? task.title : 'Timing'}</span>
+        <span className={`font-mono text-xs shrink-0 ${over?'text-amber-600 font-semibold':'text-prism-muted'}`}>
+          {over ? `+${fmtClock(overSec)} over` : `of ${timer.plannedMinutes}m`}
+        </span>
+      </div>
+      <div
+        className="h-1.5 rounded-full bg-prism-muted/15 overflow-hidden"
+        role="progressbar"
+        aria-label={`Time on ${task ? task.title : 'this task'}`}
+        aria-valuemin={0}
+        aria-valuemax={timer.plannedMinutes}
+        aria-valuenow={Math.round(elapsedSec/60)}
+        aria-valuetext={over ? `${Math.round(elapsedSec/60)} minutes, ${Math.round(overSec/60)} over the ${timer.plannedMinutes} minute estimate` : `${Math.round(elapsedSec/60)} of ${timer.plannedMinutes} minutes`}
+      >
+        <div
+          className={`h-full rounded-full transition-[width] duration-1000 ease-linear ${over?'bg-amber-500':'bg-prism-cta'}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="flex items-center gap-2 mt-2.5">
+        <button
+          onClick={onDone}
+          className="flex-1 min-h-[44px] rounded-xl bg-prism-cta text-white text-sm font-semibold shadow-prism-cta flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep focus-visible:ring-offset-2"
+        >
+          <Check className="w-4 h-4"/> Done
+        </button>
+        {/* An honest "I didn't get to the end of it" has to cost one tap, or it
+            gets recorded as done. This does not close the task — it sends it
+            back to the scheduler for a later slot. */}
+        <button
+          onClick={onNotComplete}
+          className="flex-1 min-h-[44px] rounded-xl border border-white/60 bg-white/60 text-prism-ink text-sm font-medium flex items-center justify-center gap-2 hover:bg-white/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"
+        >
+          <CalendarClock className="w-4 h-4"/> Not complete
+        </button>
+        <button
+          onClick={onCancel}
+          aria-label="Stop timing without recording anything"
+          title="Stop timing without recording anything"
+          className="w-11 h-11 shrink-0 rounded-xl text-prism-muted/70 hover:text-prism-ink flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"
+        >
+          <X className="w-4 h-4"/>
+        </button>
+      </div>
+    </div>
+  );
+}
+function fmtClock(totalSec){
+  const m = Math.floor(totalSec/60);
+  const s = totalSec%60;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+function TaskActionsMenu({ taskTitle, isExplaining, onToggleExplain, isPinnedHere, onUnpin, pressing, onTogglePressing, onReschedule }){
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState(null); // { top, left, openUpward }
   const triggerRef = useRef(null);
@@ -1305,7 +1405,7 @@ function TaskActionsMenu({ taskTitle, isExplaining, onToggleExplain, isPinnedHer
     const btn = triggerRef.current;
     if (!btn) return;
     const r = btn.getBoundingClientRect();
-    const menuHeight = 3 * 44 + 8; // worst case: explain + pressing + unpin, plus py-1 padding
+    const menuHeight = 4 * 44 + 8; // worst case: explain + pressing + reschedule + unpin, plus py-1 padding
     const openUpward = r.bottom + menuHeight > window.innerHeight;
     setPos({
       left: Math.min(r.right - 190, window.innerWidth - 198),
@@ -1396,6 +1496,16 @@ function TaskActionsMenu({ taskTitle, isExplaining, onToggleExplain, isPinnedHer
           >
             <Star className={`w-4 h-4 shrink-0 ${pressing ? 'text-amber-500' : 'text-prism-muted/50'}`} fill={pressing ? 'currentColor' : 'none'}/> {pressing ? 'Unmark as pressing' : 'Mark as pressing'}
           </button>
+          {/* The same "not complete" move as the timer bar's, reachable without
+              having timed the task. */}
+          <button
+            role="menuitem"
+            tabIndex={-1}
+            onClick={()=>{ onReschedule(); closeMenu(false); }}
+            className="w-full min-h-[44px] flex items-center gap-2.5 px-3 text-sm text-left text-prism-ink hover:bg-prism-blue/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-prism-blue-deep"
+          >
+            <CalendarClock className="w-4 h-4 shrink-0 text-prism-muted/70"/> Not now — reschedule
+          </button>
           {isPinnedHere && (
             <button
               role="menuitem"
@@ -1412,7 +1522,7 @@ function TaskActionsMenu({ taskTitle, isExplaining, onToggleExplain, isPinnedHer
     </>
   );
 }
-function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, onTogglePressing, onUnpin, slotsUnlocked, atRiskIds, draggingTaskId, onDragStartTask, onDragEndTask, dragOverKey, onDragOverSlot, onDropOnSlot, explainingKey, onToggleExplain, onEditMeeting, onDeleteMeeting, onAddActionPoint, actionPointsByMeeting, placementByTaskId }){
+function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, onTogglePressing, onUnpin, slotsUnlocked, atRiskIds, draggingTaskId, onDragStartTask, onDragEndTask, dragOverKey, onDragOverSlot, onDropOnSlot, explainingKey, onToggleExplain, onEditMeeting, onDeleteMeeting, onAddActionPoint, actionPointsByMeeting, placementByTaskId, onStartTimer, onReschedule, timingKey }){
   const d = parseDateStr(day.date);
   return (
     /*
@@ -1553,6 +1663,27 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
                         )}
                         {t.dueDate && t.dueDate<day.date && <span className="text-xs text-prism-blue-deep shrink-0 mr-1">from {formatShortDate(t.dueDate)}</span>}
                         <span className="flex-1"></span>
+                        {/* Start is offered only on today's blocks and only for
+                            work that isn't finished — a timer on Thursday's
+                            block would be timing something you are not doing. */}
+                        {isToday && !t.done && (
+                          <button
+                            onClick={()=>onStartTimer(t)}
+                            /* One timer at a time. Silently replacing a running
+                               one would throw away however long you had already
+                               spent on the first task. */
+                            disabled={!!timingKey}
+                            aria-label={`Start timing ${t.title}`}
+                            title={
+                              timingKey === t.id+'|'+t.sessionId ? 'Already timing this'
+                              : timingKey ? 'Finish or stop the running timer first'
+                              : `Start the ${t.duration}m timer`
+                            }
+                            className="w-11 h-11 shrink-0 flex items-center justify-center rounded-full text-prism-blue-deep hover:bg-prism-blue/10 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep"
+                          >
+                            <Play className="w-3.5 h-3.5" fill="currentColor"/>
+                          </button>
+                        )}
                         <button onClick={()=>onEdit(t.id)} aria-label={`Edit ${t.title}`} className="w-11 h-11 text-prism-muted/60 shrink-0 flex items-center justify-center rounded-full hover:text-prism-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep" title={t.recurringId ? 'Edit just this occurrence' : 'Edit this task'}>
                           <Pencil className="w-3.5 h-3.5"/>
                         </button>
@@ -1565,6 +1696,7 @@ function DayColumn({ day, isToday, weekLabel, onToggleDone, onDelete, onEdit, on
                           onUnpin={()=>onUnpin(t.id)}
                           pressing={!!t.pressing}
                           onTogglePressing={()=>onTogglePressing(t.id)}
+                          onReschedule={()=>onReschedule(t.id)}
                         />
                       </div>
                     </div>
@@ -2096,6 +2228,27 @@ export default function WeekPlanner(){
   const footerRef = useRef(null);
   const [footerHeight,setFooterHeight] = useState(0);
   const [captureDockEl,setCaptureDockEl] = useState(null);
+  /*
+    A running timer is deliberately DEVICE-local: it describes what this device
+    is doing right now, so it goes to localStorage rather than Firestore. Syncing
+    it would make a timer started on the phone appear to be running on the
+    laptop, and let two devices race to write the finish time.
+
+    Persisted rather than held in memory only, so locking the phone or the PWA
+    reloading mid-task does not lose the count.
+  */
+  const [activeTimer,setActiveTimer] = useState(()=>{
+    try {
+      const raw = localStorage.getItem(TIMER_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
+  useEffect(()=>{
+    try {
+      if (activeTimer) localStorage.setItem(TIMER_KEY, JSON.stringify(activeTimer));
+      else localStorage.removeItem(TIMER_KEY);
+    } catch { /* private mode / quota — the timer still works for this session */ }
+  },[activeTimer]);
   useEffect(()=>{
     const el = footerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -2357,6 +2510,17 @@ export default function WeekPlanner(){
   */
   const pendingCount = tasks.filter(t=>!t.done).length;
   const allPlaced = pendingCount>0 && overflowByTask.length===0 && dueDateRisk.count===0;
+  /*
+    The timer holds only ids, so the task it names can disappear underneath it —
+    deleted here, or completed on another device and synced in. Drop the timer
+    rather than leaving a bar counting up against nothing.
+  */
+  const timedTask = activeTimer ? tasks.find(t=>t.id===activeTimer.taskId) : null;
+  useEffect(()=>{
+    if (!activeTimer || !loaded) return;
+    const t = tasks.find(x=>x.id===activeTimer.taskId);
+    if (!t || t.done) setActiveTimer(null);
+  },[activeTimer, tasks, loaded]);
   function showCompletionToast(taskId, sessionId){
     const message = CELEBRATION_MESSAGES[Math.floor(Math.random()*CELEBRATION_MESSAGES.length)];
     setTimeInput('');
@@ -2411,6 +2575,73 @@ export default function WeekPlanner(){
   }
   function togglePressing(taskId){
     setTasks(prev=>prev.map(t=>t.id===taskId?{...t, pressing:!t.pressing}:t));
+  }
+  /* ---- Timer ---------------------------------------------------------- */
+  function startTimer(item){
+    // `item` is a scheduled piece, so item.duration is THIS chunk's length —
+    // a 90-minute task carved into three sessions times each 30-minute sitting
+    // against 30 minutes, not 90.
+    setActiveTimer({
+      taskId: item.id,
+      sessionId: item.sessionId ?? null,
+      startedAt: Date.now(),
+      plannedMinutes: Math.max(1, Number(item.duration) || MIN_TASK_MINUTES),
+    });
+  }
+  function cancelTimer(){ setActiveTimer(null); }
+  /*
+    Finishing from the timer writes actualMinutes itself instead of raising the
+    "Actual time?" prompt — the whole point of having timed it is that the app
+    already knows. The toast then reports the result against the estimate,
+    which is the reward for beating it.
+  */
+  function completeFromTimer(){
+    const timer = activeTimer;
+    if (!timer) return;
+    const mins = Math.max(1, Math.round((Date.now()-timer.startedAt)/60000));
+    setActiveTimer(null);
+    setTasks(prev=>prev.map(t=>{
+      if (t.id!==timer.taskId) return t;
+      let sessions = t.sessions;
+      if ((!sessions || !sessions.length) && schedule.sessionUpdates && schedule.sessionUpdates.has(t.id)){
+        sessions = schedule.sessionUpdates.get(t.id);
+      }
+      if (sessions && sessions.length){
+        const newSessions = sessions.map(s=>s.id===timer.sessionId?{...s, done:true, doneAt:Date.now(), actualMinutes:mins}:s);
+        const allDone = newSessions.every(s=>s.done);
+        return { ...t, sessions:newSessions, done:allDone, doneAt: allDone?Date.now():t.doneAt };
+      }
+      return { ...t, done:true, doneAt:Date.now(), actualMinutes:mins };
+    }));
+    const diff = timer.plannedMinutes - mins;
+    const message = diff > 0
+      ? `Done in ${mins}m — ${diff}m under your ${timer.plannedMinutes}m estimate.`
+      : diff < 0
+        ? `Done in ${mins}m — ${-diff}m over the ${timer.plannedMinutes}m you planned.`
+        : `Done in ${mins}m — exactly on your estimate.`;
+    setToast({ id: Date.now(), message, askTime:false, taskId: timer.taskId, sessionId: timer.sessionId });
+  }
+  function notCompleteFromTimer(){
+    const timer = activeTimer;
+    if (!timer) return;
+    setActiveTimer(null);
+    rescheduleTask(timer.taskId);
+  }
+  /*
+    "Not complete" does NOT close the task. It pushes it past this moment so the
+    scheduler places it in a LATER block instead of the one it just failed to
+    fit into, and drops any manual pin holding it to that block.
+
+    notBefore is also set by meeting action points (an action point cannot start
+    before its meeting ends), so this takes the LATER of the two boundaries: a
+    task deferred to next Tuesday must not be loosened back to this afternoon.
+  */
+  function rescheduleTask(taskId){
+    const boundary = { date: todayStr, minute: nowMin + 1 };
+    setTasks(prev=>prev.map(t=> t.id===taskId
+      ? { ...t, pinnedTo:null, notBefore: laterBoundary(t.notBefore, boundary) }
+      : t));
+    setToast({ id: Date.now(), message: 'Sent back to the scheduler for a later block.', askTime:false });
   }
   // ---- Drag and drop: manual placement overrides ----
   // Dropping a task on a slot writes a `pinnedTo` marker onto the TASK (not the
@@ -2679,13 +2910,24 @@ export default function WeekPlanner(){
               style={{ '--day-count': Math.max(groupedDays.length,1) }}
             >
               {groupedDays.map(day=>(
-                <DayColumn key={day.date} day={day} isToday={day.date===todayStr} weekLabel={day.date===nextWeekStart ? 'Next week' : day.date===weekThreeStart ? 'Week after' : null} onToggleDone={toggleDone} onDelete={deleteTask} onEdit={startEditing} onTogglePressing={togglePressing} onUnpin={unpinTask} slotsUnlocked={slotsUnlocked} atRiskIds={dueDateRisk.atRiskIds} draggingTaskId={draggingTaskId} onDragStartTask={handleDragStartTask} onDragEndTask={handleDragEndTask} dragOverKey={dragOverKey} onDragOverSlot={setDragOverKey} onDropOnSlot={handleDropOnSlot} explainingKey={explainingKey} onToggleExplain={toggleExplain} onEditMeeting={startEditingMeeting} onDeleteMeeting={deleteMeeting} onAddActionPoint={addActionPoint} actionPointsByMeeting={actionPointsByMeeting} placementByTaskId={placementByTaskId}/>
+                <DayColumn key={day.date} day={day} isToday={day.date===todayStr} weekLabel={day.date===nextWeekStart ? 'Next week' : day.date===weekThreeStart ? 'Week after' : null} onToggleDone={toggleDone} onDelete={deleteTask} onEdit={startEditing} onTogglePressing={togglePressing} onUnpin={unpinTask} slotsUnlocked={slotsUnlocked} atRiskIds={dueDateRisk.atRiskIds} draggingTaskId={draggingTaskId} onDragStartTask={handleDragStartTask} onDragEndTask={handleDragEndTask} dragOverKey={dragOverKey} onDragOverSlot={setDragOverKey} onDropOnSlot={handleDropOnSlot} explainingKey={explainingKey} onToggleExplain={toggleExplain} onEditMeeting={startEditingMeeting} onDeleteMeeting={deleteMeeting} onAddActionPoint={addActionPoint} actionPointsByMeeting={actionPointsByMeeting} placementByTaskId={placementByTaskId} onStartTimer={startTimer} onReschedule={rescheduleTask} timingKey={activeTimer ? activeTimer.taskId+"|"+activeTimer.sessionId : null}/>
               ))}
             </div>
           </div>
         </div>
       </div>
       <div ref={footerRef} className="relative z-10 shrink-0 border-t border-white/60 bg-white/70 backdrop-blur-xl backdrop-saturate-150">
+        {/* Inside the measured footer, so the Capture button clears the timer
+            too when one is running. */}
+        {activeTimer && (
+          <TimerBar
+            timer={activeTimer}
+            task={timedTask}
+            onDone={completeFromTimer}
+            onNotComplete={notCompleteFromTimer}
+            onCancel={cancelTimer}
+          />
+        )}
         <div className="flex items-center gap-4 sm:gap-6 px-4 sm:px-6 py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] flex-wrap">
           <StatsBar stats={stats}/>
           <div className="flex-1"></div>

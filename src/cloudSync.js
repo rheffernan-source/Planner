@@ -589,17 +589,21 @@ export async function exportBackup(uid) {
 }
 
 // --- captures: one-shot writes for the mobile "Capture Thought" flow ------
-// Idea/Follow-up/Conversation captures only — Todo captures go straight
-// through useCloudTasks via addTask, so there is never a second task list.
+// Idea/Follow-up/Conversation/Observation captures only — Todo captures go
+// straight through useCloudTasks via addTask, so there is never a second task
+// list.
 // Each write is a single complete document, unlike useCloudTasks/useCloudDoc
 // which merge and debounce: a capture has no follow-up edits to coalesce.
 // The Planner Sync Bridge (Expansions/rohan-planner-sync) watches this
 // collection and drains each doc into Team Inbox, then deletes it — this
 // collection is a transient relay, not canonical storage.
-export async function createCapture(uid, { category, note }) {
+// `subject` is set only on observations (Reading / Writing / Phonics / Maths /
+// Pastoral). stripUndefined drops it everywhere else, so the document shape for
+// every other category is byte-for-byte what it was before observations existed.
+export async function createCapture(uid, { category, note, subject }) {
   if (!uid) return null;
   const ref = doc(collection(db, "users", uid, "captures"));
-  await setDoc(ref, stripUndefined({ category, note, createdAt: Date.now() }));
+  await setDoc(ref, stripUndefined({ category, note, subject, createdAt: Date.now() }));
   return ref.id;
 }
 

@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { NotebookPen, X, Lightbulb, ListTodo, Flag, MessageCircle, Loader2 } from 'lucide-react';
+import { NotebookPen, X, Lightbulb, ListTodo, Flag, MessageCircle, Loader2, Eye } from 'lucide-react';
 import { createCapture } from './cloudSync';
 import { DURATION_PRESETS, MIN_TASK_MINUTES } from './App';
 
-// Stored value ('idea'/'todo'/'follow-up'/'conversation') is what the Planner
+// Stored value ('idea'/'todo'/'follow-up'/'conversation'/'observation') is what the Planner
 // Sync Bridge's drainCaptureToInbox reads to build the Team Inbox filename and
 // the "**Capture category:**" label — keep these in sync with
 // Expansions/rohan-planner-sync/runtime/sync.mjs if this list ever changes.
@@ -13,7 +13,16 @@ const CATEGORIES = [
   { value: 'todo', label: 'Todo', icon: ListTodo },
   { value: 'follow-up', label: 'Follow-up', icon: Flag },
   { value: 'conversation', label: 'Conversation', icon: MessageCircle },
+  { value: 'observation', label: 'Observation', icon: Eye },
 ];
+
+/*
+  Classroom observations carry a subject. It is stored on the capture document
+  and the bridge turns it into a lowercase TAG on the Inbox note — GL-002
+  declares no `subject` field, and inventing one is a hard-rule violation, so
+  the subject travels as a tag, which every note may carry.
+*/
+const OBSERVATION_SUBJECTS = ['Reading', 'Writing', 'Phonics', 'Maths', 'Pastoral'];
 
 /**
  * Always-reachable mobile capture flow: FAB -> note -> category -> (Todo only)
@@ -30,6 +39,7 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
   const [duration, setDuration] = useState(15);
   const [customDuration, setCustomDuration] = useState(false);
   const [dueDate, setDueDate] = useState('');
+  const [subject, setSubject] = useState(null);
   const [saving, setSaving] = useState(false);
   const sheetRef = useRef(null);
   const triggerRef = useRef(null);
@@ -49,6 +59,7 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
     setDuration(15);
     setCustomDuration(false);
     setDueDate('');
+    setSubject(null);
     setSaving(false);
   }
   function openFrom(e){
@@ -116,15 +127,24 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
     return ()=>sheet.removeEventListener('keydown', onKeyDown);
   },[open]);
 
+  // An observation without a subject is not saveable: the subject is what files
+  // it, so collecting it later means never.
+  const needsSubject = category === 'observation' && !subject;
+  const canSave = !!note.trim() && !!category && !needsSubject && !saving;
+
   async function submit(){
     const text = note.trim();
-    if (!text || !category || saving) return;
+    if (!canSave) return;
     setSaving(true);
     if (category === 'todo') {
       const mins = Math.max(MIN_TASK_MINUTES, Number(duration) || MIN_TASK_MINUTES);
       onAddTodo({ title: text, duration: mins, dueDate: dueDate || null, pressing: false, source: 'capture' });
     } else {
-      await createCapture(uid, { category, note: text });
+      await createCapture(uid, {
+        category,
+        note: text,
+        subject: category === 'observation' ? subject : undefined,
+      });
     }
     close();
   }
@@ -235,6 +255,29 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
               </div>
             </div>
 
+            {category === 'observation' && (
+              <div className="border-t border-white/50 pt-3">
+                <label className="text-xs text-prism-muted block mb-1.5">Which subject?</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {OBSERVATION_SUBJECTS.map(s=>(
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={()=>setSubject(s)}
+                      aria-pressed={subject===s}
+                      className={`min-h-[36px] text-xs px-3 py-1.5 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep ${subject===s ? 'bg-prism-cta text-white border-transparent' : 'border-white/60 bg-white/50 text-prism-muted hover:border-prism-blue/50'}`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-prism-muted/70 mt-2 leading-relaxed">
+                  Goes to your Inbox tagged <span className="font-mono">observation</span>
+                  {subject ? <> and <span className="font-mono">{subject.toLowerCase()}</span></> : null}. Name the student in the note.
+                </p>
+              </div>
+            )}
+
             {category === 'todo' && (
               <div className="space-y-3 border-t border-white/50 pt-3">
                 <div>
@@ -267,7 +310,7 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
             <button
               type="button"
               onClick={submit}
-              disabled={!note.trim() || !category || saving}
+              disabled={!canSave}
               className="w-full py-2.5 min-h-[44px] rounded-xl bg-prism-cta text-white text-sm font-medium shadow-prism-cta disabled:opacity-40 disabled:shadow-none flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-prism-blue-deep focus-visible:ring-offset-2"
             >
               {saving && <Loader2 className="w-4 h-4 animate-spin"/>}

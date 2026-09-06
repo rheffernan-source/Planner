@@ -2974,6 +2974,16 @@ export default function WeekPlanner(){
             >
               Import any tasks saved in this browser
             </button>
+            {/*
+              Which build am I actually looking at? On a PWA the honest answer
+              is often "not the one you just deployed" — the service worker can
+              serve a cached shell for days. Stamped at build time from the
+              commit ref so this can be read straight off the phone instead of
+              inferred from whether a fix appears to have worked.
+            */}
+            <p className="mt-4 text-center font-mono text-[10px] text-prism-muted/60 select-all">
+              build {__BUILD_STAMP__}
+            </p>
           </div>
         )}
         {/* Phone-only bottom bar. It lives INSIDE the element the footer's

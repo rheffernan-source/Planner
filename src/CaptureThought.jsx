@@ -44,6 +44,26 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
   const sheetRef = useRef(null);
   const triggerRef = useRef(null);
   /*
+    How much of the layout viewport the keyboard is covering. `position:fixed`
+    resolves against the LAYOUT viewport, which does not shrink when the
+    keyboard opens, so an `items-end` sheet is pinned to the bottom of the
+    screen — underneath the keyboard, with the Save button unreachable. Only
+    visualViewport knows what is actually on the glass.
+  */
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  useEffect(()=>{
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    if (!open || !vv) return;
+    const update = ()=>setKeyboardInset(Math.max(0, window.innerHeight - vv.height - vv.offsetTop));
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return ()=>{
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  },[open]);
+  /*
     There are two triggers now — the docked tab in the phone bottom bar and the
     floating pill on wider screens — and only one of them is displayed at a
     time. Rather than re-deriving which one that is on close (a media query in
@@ -210,25 +230,34 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
       </button>
 
       {/*
-        Portalled straight to <body>, not left as a descendant of the app
-        shell. The shell (`week-planner-root`) carries `overflow-hidden` and
-        `isolate`; iOS/WebKit has long-standing bugs where a `position:fixed`
-        element nested inside such an ancestor gets sized/clipped against
-        that ancestor's box instead of the true viewport, which is exactly
-        the "cropped past the right edge" symptom this dialog showed on
-        phone — the day board and footer never hit it because they're plain
-        flowed content, not fixed-position. `dockEl` above shows the pattern
-        already exists in this component for the trigger button; this is the
-        same fix applied to the dialog itself.
+        Portalled to <body>. To be clear about why, because the first version
+        of this comment claimed otherwise: this did NOT fix the sheet being
+        cropped off the right of the screen. That was WebKit zoom (see the
+        textarea below), and the ancestor chain here — Root, AuthGate, the app
+        shell — carries no transform/filter/backdrop-filter/contain, so there
+        was never a containing block for `position:fixed` to escape. The portal
+        is kept as cheap insurance: it means a future `transform` or
+        `backdrop-filter` added anywhere up that chain cannot silently break
+        this dialog's positioning, which is a real and easy mistake to make in
+        a codebase this full of glass effects.
+
+        `paddingBottom` is the part that does real work — see keyboardInset.
       */}
       {open && createPortal(
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-prism-navy/50 backdrop-blur-sm" onClick={close}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-prism-navy/50 backdrop-blur-sm"
+          style={{ paddingBottom: keyboardInset ? `${keyboardInset}px` : undefined }}
+          onClick={close}
+        >
           <div
             ref={sheetRef}
             role="dialog"
             aria-modal="true"
             aria-label="Capture a thought"
-            className="w-full sm:max-w-sm bg-white/80 backdrop-blur-2xl backdrop-saturate-150 border border-white/60 rounded-t-3xl sm:rounded-2xl p-5 space-y-4 max-h-[85vh] overflow-y-auto shadow-prism-card"
+            /* 85dvh, not 85vh: `vh` resolves against the LARGE viewport (toolbars
+               hidden), so on a phone 85vh is taller than what is actually on the
+               glass and the sheet's own bottom can sit off-screen. */
+            className="w-full sm:max-w-sm bg-white/80 backdrop-blur-2xl backdrop-saturate-150 border border-white/60 rounded-t-3xl sm:rounded-2xl p-5 space-y-4 max-h-[85dvh] overflow-y-auto shadow-prism-card"
             onClick={e=>e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -237,7 +266,19 @@ export default function CaptureThought({ uid, onAddTodo, footerHeight = 0, dockE
             </div>
 
             <textarea
-              autoFocus
+              /*
+                NOT autofocused on a phone. WebKit zooms the page to fit a
+                focused field ("zoom-to-focused-element"), and it scales to the
+                field's box plus margin — measured at ~1.2x here, which inflates
+                this correctly-sized 390px sheet to ~470px and crops its whole
+                right-hand column off the screen. Focusing on open meant that
+                happened before the user had even read the sheet, and the zoom
+                is sticky until a reload or a manual pinch-out. On a phone the
+                user taps the field when they are ready; the 16px rule in
+                index.css then holds the scale at 1 when they do. Desktop has no
+                such behaviour and keeps the convenience.
+              */
+              autoFocus={typeof window === 'undefined' || !window.matchMedia('(max-width: 639px)').matches}
               rows={3}
               value={note}
               onChange={e=>setNote(e.target.value)}

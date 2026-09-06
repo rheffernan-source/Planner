@@ -4,3 +4,30 @@
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
+
+# Netlify's defaults are already correct here (max-age=0,must-revalidate on
+# sw.js/index.html, immutable on hashed /assets). These are pinned explicitly
+# so a future dashboard change or plugin cannot quietly lengthen the service
+# worker's cache lifetime — a stale sw.js is how a client gets frozen on an old
+# build with no visible error. Do NOT use no-store on sw.js; must-revalidate is
+# correct and is what the update check expects.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Service-Worker-Allowed = "/"
+
+[[headers]]
+  for = "/registerSW.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
